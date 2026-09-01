@@ -1,0 +1,13 @@
+# Rust build output
+target/
+gen/
+
+# Tauri generated
+gen/schemas/
+
+# Cargo lock(库项目可忽略,二进制项目可提交,此处为应用,保留以复现构建)
+# Cargo.lock
+
+# IDE
+.idea/
+.vscode/
