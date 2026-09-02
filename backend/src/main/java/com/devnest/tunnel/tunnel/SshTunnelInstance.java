@@ -236,4 +236,30 @@ public class SshTunnelInstance {
     public List<SshPortMapping> getMappings() {
         return mappings;
     }
+
+    /**
+     * 动态添加端口转发(二期控制台隧道模式用).
+     * 在已建立的隧道 Session 上加一条本地→远端映射.
+     */
+    public void addDynamicForwarding(int localPort, String remoteHost, int remotePort) throws JSchException {
+        if (session == null || !session.isConnected()) {
+            throw new IllegalStateException("隧道未连接,无法添加转发");
+        }
+        session.setPortForwardingL(localPort, remoteHost, remotePort);
+        log.info("隧道[{}]动态转发: 127.0.0.1:{} → {}:{}", bastion.getName(), localPort, remoteHost, remotePort);
+    }
+
+    /**
+     * 移除动态端口转发(控制台关闭时调用).
+     */
+    public void removeDynamicForwarding(int localPort) {
+        if (session != null && session.isConnected()) {
+            try {
+                session.delPortForwardingL(localPort);
+                log.info("隧道[{}]移除动态转发: {}", bastion.getName(), localPort);
+            } catch (JSchException e) {
+                log.warn("移除端口转发失败: {}", e.getMessage());
+            }
+        }
+    }
 }

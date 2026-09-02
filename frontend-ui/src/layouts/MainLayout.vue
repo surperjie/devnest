@@ -7,6 +7,7 @@ const route = useRoute();
 // 菜单配置(可扩展):后续模块上线时把 disabled 改 false + 在 router/index.js 加路由
 const menus = [
   { index: "/tunnel", title: "SSH 隧道", icon: "Connection", disabled: false },
+  { index: "/console", title: "远程控制台", icon: "Monitor", disabled: false },
   { index: "/datasource", title: "数据源", icon: "Coin", disabled: true },
   { index: "/redis", title: "Redis", icon: "Key", disabled: true },
   { index: "/http", title: "HTTP 调试", icon: "Promotion", disabled: true },

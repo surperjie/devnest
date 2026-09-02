@@ -14,6 +14,12 @@ const routes = [
         component: () => import("../views/tunnel/BastionList.vue"),
         meta: { title: "SSH 隧道", icon: "Connection" },
       },
+      {
+        path: "console",
+        name: "console",
+        component: () => import("../views/console/ConsoleList.vue"),
+        meta: { title: "远程控制台", icon: "Monitor" },
+      },
       // 二期+ 模块路由占位:
       // { path: "datasource", name: "datasource", component: ..., meta: { title: "数据源", icon: "Coin" } },
       // { path: "redis", name: "redis", component: ..., meta: { title: "Redis", icon: "Key" } },
