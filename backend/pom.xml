@@ -20,6 +20,7 @@
         <module>devnest-core</module>
         <module>devnest-tunnel</module>
         <module>devnest-console</module>
+        <module>devnest-datasource</module>
         <module>devnest-boot</module>
     </modules>
 
@@ -71,6 +72,11 @@
             <dependency>
                 <groupId>com.devnest</groupId>
                 <artifactId>devnest-console</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-datasource</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

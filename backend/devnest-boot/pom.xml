@@ -24,6 +24,10 @@
             <groupId>com.devnest</groupId>
             <artifactId>devnest-console</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.devnest</groupId>
+            <artifactId>devnest-datasource</artifactId>
+        </dependency>
 
         <!-- 数据库驱动(按 profile 切换) -->
         <dependency>

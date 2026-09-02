@@ -20,8 +20,19 @@ const routes = [
         component: () => import("../views/console/ConsoleList.vue"),
         meta: { title: "远程控制台", icon: "Monitor" },
       },
-      // 二期+ 模块路由占位:
-      // { path: "datasource", name: "datasource", component: ..., meta: { title: "数据源", icon: "Coin" } },
+      {
+        path: "datasource",
+        name: "datasource",
+        component: () => import("../views/datasource/DataSourceList.vue"),
+        meta: { title: "数据源", icon: "Coin" },
+      },
+      {
+        path: "datasource/:id/explorer",
+        name: "datasource-explorer",
+        component: () => import("../views/datasource/DatabaseExplorer.vue"),
+        meta: { title: "数据库浏览器", icon: "Coin", hidden: true },
+      },
+      // 后续模块路由占位:
       // { path: "redis", name: "redis", component: ..., meta: { title: "Redis", icon: "Key" } },
       // { path: "http", name: "http", component: ..., meta: { title: "HTTP 调试", icon: "Promotion" } },
       // { path: "ai", name: "ai", component: ..., meta: { title: "AI 配置", icon: "MagicStick" } },
