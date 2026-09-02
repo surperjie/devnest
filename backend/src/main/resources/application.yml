@@ -1,35 +1,50 @@
 server:
+  address: 127.0.0.1   # 仅绑回环,杜绝局域网/外网暴露
   port: 8080
 
 spring:
   application:
     name: devnest-backend
-  datasource:
-    url: jdbc:mysql://localhost:3306/devnest?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai
-    username: root
-    password: root
-    driver-class-name: com.mysql.cj.jdbc.Driver
+  threads:
+    virtual:
+      enabled: true      # Java 21 虚拟线程,Tomcat 请求/异步任务自动虚拟线程化
   jpa:
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      ddl-auto: validate   # Flyway 管 schema,JPA 仅校验
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
 
-# SSH 隧道配置(示例,按需调整)
-ssh:
+# SSH 隧道默认参数(可被实体字段覆盖)
+devnest:
   tunnel:
-    enabled: false
-    host: 127.0.0.1
-    port: 22
-    user: tunnel
-    password: ""
-    local-port: 13306
-    remote-host: 127.0.0.1
-    remote-port: 3306
+    max-retries: 5
+    retry-interval-ms: 3000
+    heartbeat-interval-s: 10
+    heartbeat-timeout-ms: 3000
+    connect-timeout-ms: 5000
+
+# Actuator:暴露健康检查 + 优雅关闭(供 Tauri sidecar 轮询/关闭)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,shutdown
+  endpoint:
+    health:
+      show-details: always
+    shutdown:
+      enabled: true
 
 logging:
   level:
-    com.devnest: debug
-    org.hibernate.SQL: debug
+    root: INFO
+    com.devnest: DEBUG
+    org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
