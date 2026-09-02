@@ -3,9 +3,13 @@ package com.devnest.tunnel.service.impl;
 import com.devnest.common.crypto.CryptoService;
 import com.devnest.common.exception.BizException;
 import com.devnest.common.exception.ErrorCode;
+import com.devnest.tunnel.dto.BastionExportItem;
+import com.devnest.tunnel.dto.BastionExportPayload;
+import com.devnest.tunnel.dto.BastionImportResult;
 import com.devnest.tunnel.dto.SshBastionDto;
 import com.devnest.tunnel.dto.SshBastionRequest;
 import com.devnest.tunnel.dto.SshPortMappingDto;
+import com.devnest.tunnel.dto.SshPortMappingRequest;
 import com.devnest.tunnel.dto.TunnelStatusDto;
 import com.devnest.tunnel.entity.SshBastion;
 import com.devnest.tunnel.entity.SshPortMapping;
@@ -19,8 +23,12 @@ import com.devnest.tunnel.tunnel.SshTunnelManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * SSH 隧道服务实现.
@@ -51,7 +59,16 @@ public class SshTunnelServiceImpl implements SshTunnelService {
 
     @Override
     public List<SshBastionDto> listBastions() {
-        return bastionRepo.findAll().stream().map(this::toDto).toList();
+        List<SshBastion> bastions = bastionRepo.findAll();
+        if (bastions.isEmpty()) {
+            return List.of();
+        }
+        // 一次查所有 mappings,按 bastionId 分组,避免 N+1
+        Map<Long, List<SshPortMapping>> grouped = mappingRepo.findAll().stream()
+                .collect(Collectors.groupingBy(SshPortMapping::getBastionId));
+        return bastions.stream()
+                .map(b -> toDto(b, grouped.getOrDefault(b.getId(), List.of())))
+                .toList();
     }
 
     @Override
@@ -68,8 +85,8 @@ public class SshTunnelServiceImpl implements SshTunnelService {
         b.setSshPasswordCipher(crypto.encrypt(req.sshPassword()));
         b.setRemark(req.remark());
         bastionRepo.save(b);
-        int count = saveMappings(b.getId(), req.mappings());
-        return toDto(b, count);
+        List<SshPortMapping> mappings = saveMappings(b.getId(), req.mappings());
+        return toDto(b, mappings);
     }
 
     @Override
@@ -93,8 +110,8 @@ public class SshTunnelServiceImpl implements SshTunnelService {
         b.setRemark(req.remark());
         bastionRepo.save(b);
         mappingRepo.deleteByBastionId(id);
-        int count = saveMappings(id, req.mappings());
-        return toDto(b, count);
+        List<SshPortMapping> mappings = saveMappings(id, req.mappings());
+        return toDto(b, mappings);
     }
 
     @Override
@@ -143,32 +160,72 @@ public class SshTunnelServiceImpl implements SshTunnelService {
         return new TunnelStatusDto(id, b.getName(), TunnelState.IDLE.name(), dtos);
     }
 
-    private int saveMappings(Long bastionId, List<com.devnest.tunnel.dto.SshPortMappingRequest> reqs) {
-        if (reqs == null || reqs.isEmpty()) {
-            return 0;
+    @Override
+    public BastionExportPayload exportBastions() {
+        List<SshBastion> bastions = bastionRepo.findAll();
+        Map<Long, List<SshPortMapping>> grouped = mappingRepo.findAll().stream()
+                .collect(Collectors.groupingBy(SshPortMapping::getBastionId));
+        List<BastionExportItem> items = bastions.stream()
+                .map(b -> {
+                    List<SshPortMapping> ms = grouped.getOrDefault(b.getId(), List.of());
+                    List<SshPortMappingRequest> mappingReqs = ms.stream().map(m ->
+                            new SshPortMappingRequest(m.getRemoteHost(), m.getRemotePort(),
+                                    m.getPreferredLocalPort(), m.getLabel())).toList();
+                    return new BastionExportItem(
+                            b.getName(), b.getSshHost(), b.getSshPort(), b.getSshUser(),
+                            crypto.decrypt(b.getSshPasswordCipher()),
+                            b.getRemark(), mappingReqs);
+                }).toList();
+        return new BastionExportPayload(1, LocalDateTime.now(), items);
+    }
+
+    @Override
+    @Transactional
+    public BastionImportResult importBastions(BastionExportPayload payload) {
+        if (payload == null || payload.bastions() == null) {
+            return new BastionImportResult(0, 0, List.of());
         }
-        int count = 0;
-        for (com.devnest.tunnel.dto.SshPortMappingRequest r : reqs) {
+        int success = 0;
+        List<String> skipped = new ArrayList<>();
+        for (BastionExportItem item : payload.bastions()) {
+            if (bastionRepo.existsByName(item.name())) {
+                skipped.add(item.name());
+                continue;
+            }
+            SshBastionRequest req = new SshBastionRequest(
+                    item.name(), item.sshHost(), item.sshPort(), item.sshUser(),
+                    item.sshPassword(), item.remark(), item.mappings());
+            createBastion(req);
+            success++;
+        }
+        return new BastionImportResult(success, skipped.size(), skipped);
+    }
+
+    private List<SshPortMapping> saveMappings(Long bastionId, List<SshPortMappingRequest> reqs) {
+        if (reqs == null || reqs.isEmpty()) {
+            return List.of();
+        }
+        List<SshPortMapping> saved = new ArrayList<>(reqs.size());
+        for (SshPortMappingRequest r : reqs) {
             SshPortMapping m = mappingMapper.toEntity(r);
             m.setBastionId(bastionId);
             mappingRepo.save(m);
-            count++;
+            saved.add(m);
         }
-        return count;
+        return saved;
     }
 
-    private SshBastionDto toDto(SshBastion b) {
-        int count = mappingRepo.findByBastionId(b.getId()).size();
-        return toDto(b, count);
-    }
-
-    private SshBastionDto toDto(SshBastion b, int mappingCount) {
+    private SshBastionDto toDto(SshBastion b, List<SshPortMapping> mappings) {
         SshTunnelInstance inst = tunnelManager.getInstance(b.getId());
         boolean running = inst != null && inst.getState().isRunning();
+        List<SshPortMappingDto> mappingDtos = mappings.stream().map(m -> new SshPortMappingDto(
+                m.getId(), m.getBastionId(), m.getRemoteHost(), m.getRemotePort(),
+                m.getPreferredLocalPort(), null, m.getLabel(),
+                m.getCreateTime(), m.getUpdateTime())).toList();
         return new SshBastionDto(
                 b.getId(), b.getName(), b.getSshHost(), b.getSshPort(),
                 b.getSshUser(), crypto.mask(), b.getRemark(),
-                running, mappingCount, b.getCreateTime(), b.getUpdateTime());
+                running, mappings.size(), mappingDtos, b.getCreateTime(), b.getUpdateTime());
     }
 
     private TunnelStatusDto toStatusDto(SshTunnelInstance inst) {

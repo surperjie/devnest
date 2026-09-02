@@ -10,4 +10,6 @@ export const tunnelApi = {
   stopTunnel: (id) => http.post(`/tunnel/bastions/${id}/stop`),
   listRunningStatus: () => http.get("/tunnel/status"),
   getStatus: (id) => http.get(`/tunnel/bastions/${id}/status`),
+  exportBastions: () => http.get("/tunnel/bastions/export"),
+  importBastions: (data) => http.post("/tunnel/bastions/import", data),
 };

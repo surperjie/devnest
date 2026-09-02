@@ -1,6 +1,8 @@
 package com.devnest.tunnel.api;
 
 import com.devnest.common.response.ApiResult;
+import com.devnest.tunnel.dto.BastionExportPayload;
+import com.devnest.tunnel.dto.BastionImportResult;
 import com.devnest.tunnel.dto.SshBastionDto;
 import com.devnest.tunnel.dto.SshBastionRequest;
 import com.devnest.tunnel.dto.TunnelStatusDto;
@@ -75,5 +77,15 @@ public class SshTunnelController {
     @GetMapping("/bastions/{id}/status")
     public ApiResult<TunnelStatusDto> getStatus(@PathVariable Long id) {
         return ApiResult.ok(service.getStatus(id));
+    }
+
+    @GetMapping("/bastions/export")
+    public ApiResult<BastionExportPayload> exportBastions() {
+        return ApiResult.ok(service.exportBastions());
+    }
+
+    @PostMapping("/bastions/import")
+    public ApiResult<BastionImportResult> importBastions(@RequestBody BastionExportPayload payload) {
+        return ApiResult.ok(service.importBastions(payload));
     }
 }

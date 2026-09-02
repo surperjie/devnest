@@ -29,3 +29,6 @@ replay_pid*
 *.zip
 *.tar.gz
 *.rar
+
+# H2 data files
+data/

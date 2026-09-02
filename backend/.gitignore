@@ -18,4 +18,7 @@ logs/
 *.jar
 *.war
 
+# H2 数据文件(本地持久化,不入库)
+data/
+
 HELP.md

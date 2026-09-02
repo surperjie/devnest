@@ -5,6 +5,13 @@ server:
 spring:
   application:
     name: devnest-backend
+  datasource:
+    # H2 文件库(项目根 data/ 下),数据落盘持久化,重启不丢
+    # DB_CLOSE_DELAY=-1 防连接池关闭时 drop;MODE=MySQL 与 prod 一致
+    url: jdbc:h2:file:./data/devnest-dev;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
   threads:
     virtual:
       enabled: true      # Java 21 虚拟线程,Tomcat 请求/异步任务自动虚拟线程化
