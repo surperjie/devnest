@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.devnest</groupId>
+        <artifactId>devnest-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>devnest-console</artifactId>
+    <name>devnest-console</name>
+    <description>远程控制台模块 - xterm终端/WebSocket通信/依赖 TunnelPortForwarder SPI解耦</description>
+
+    <dependencies>
+        <!-- console 仅通过 core.spi 隧道接口交互,不直接依赖 tunnel 实现,符合 DIP 依赖倒置原则 -->
+        <dependency>
+            <groupId>com.devnest</groupId>
+            <artifactId>devnest-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- WebSocket -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
+        <!-- JSch (ChannelShell) -->
+        <dependency>
+            <groupId>com.github.mwiede</groupId>
+            <artifactId>jsch</artifactId>
+        </dependency>
+
+        <!-- MapStruct -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+        </dependency>
+    </dependencies>
+</project>

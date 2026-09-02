@@ -1,0 +1,77 @@
+server:
+  address: 127.0.0.1   # 仅绑回环,杜绝局域网/外网暴露
+  port: 8080
+
+spring:
+  application:
+    name: devnest-backend
+  datasource:
+    # H2 文件库(项目根 data/ 下),数据落盘持久化,重启不丢
+    # DB_CLOSE_DELAY=-1 防连接池关闭时 drop;MODE=MySQL 与 prod 一致
+    url: jdbc:h2:file:./data/devnest-dev;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  threads:
+    virtual:
+      enabled: true      # Java 21 虚拟线程,Tomcat 请求/异步任务自动虚拟线程化
+  jpa:
+    hibernate:
+      ddl-auto: validate   # Flyway 管 schema,JPA 仅校验
+    properties:
+      hibernate:
+        format_sql: false
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+# SSH 隧道默认参数(可被实体字段覆盖)
+devnest:
+  tunnel:
+    max-retries: 5
+    retry-interval-ms: 3000
+    heartbeat-interval-s: 10
+    heartbeat-timeout-ms: 3000
+    connect-timeout-ms: 5000
+
+# Actuator:仅暴露健康检查/信息/优雅关闭,详细数据要求 IP 白名单
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,shutdown
+  endpoint:
+    health:
+      # 仅授权(本地 IP)请求才显示连接池/磁盘等详细信息,外部请求只能看到 UP/DOWN
+      show-details: when-authorized
+    shutdown:
+      enabled: true
+  info:
+    env:
+      enabled: true
+  # 全局敏感 key 脱敏(所有 actuator/info/env 输出都生效,不再重复 endpoint.*)
+  sanitize:
+    keys-to-sanitize:
+      - password
+      - secret
+      - token
+      - credential
+      - api.key
+      - api_key
+      - private.key
+      - "*.password"
+      - "*.secret"
+      - "*.token"
+  security:
+    filter:
+      dispatcher-types: request,error,async
+
+logging:
+  level:
+    root: INFO
+    com.devnest: DEBUG
+    org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

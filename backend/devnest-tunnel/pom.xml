@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.devnest</groupId>
+        <artifactId>devnest-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>devnest-tunnel</artifactId>
+    <name>devnest-tunnel</name>
+    <description>SSH 隧道业务模块 - 跳板机管理/端口转发/虚拟线程IO/实现TunnelPortForwarder SPI</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.devnest</groupId>
+            <artifactId>devnest-core</artifactId>
+        </dependency>
+        <!-- Lombok 在 spring-boot-starter-parent 里通过 spring-boot-devtools + spring-boot-configuration-processor 引入,但 <optional>true</optional>,业务模块需要显式依赖(provided 即可) -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Spring WebSocket 已在 boot 聚合, tunnel 模块暂时不需要 websocket;仅 web -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- JSch SSH -->
+        <dependency>
+            <groupId>com.github.mwiede</groupId>
+            <artifactId>jsch</artifactId>
+        </dependency>
+
+        <!-- MapStruct 对象映射 -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+        </dependency>
+    </dependencies>
+</project>

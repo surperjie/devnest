@@ -5,6 +5,7 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+.trae/
 *.iml
 
 # Logs
@@ -32,3 +33,7 @@ replay_pid*
 
 # H2 data files
 data/
+
+# Backup
+src-backup/
+**/target/

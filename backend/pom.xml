@@ -4,6 +4,25 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- ============================================================
+         DevNest 多模块根 POM(聚合 + 依赖/插件统一管理)
+         任何版本号只在此处声明,子模块一律不写 <version>
+         ============================================================ -->
+    <groupId>com.devnest</groupId>
+    <artifactId>devnest-parent</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>devnest-parent</name>
+    <description>DevNest 多模块聚合工程 - Spring Boot 3 + Java 21</description>
+
+    <modules>
+        <module>devnest-common</module>
+        <module>devnest-core</module>
+        <module>devnest-tunnel</module>
+        <module>devnest-console</module>
+        <module>devnest-boot</module>
+    </modules>
+
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
@@ -11,132 +30,104 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.devnest</groupId>
-    <artifactId>devnest-backend</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
-    <name>devnest-backend</name>
-    <description>DevNest backend service: SSH tunnel and database logic</description>
-
     <properties>
         <java.version>21</java.version>
-        <jsch.version>0.2.17</jsch.version>
-        <resilience4j.version>2.2.0</resilience4j.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
+
+        <!-- 统一三方依赖版本(子模块不写 version) -->
+        <jsch.version>0.2.16</jsch.version>
+        <bcprov-jdk18on.version>1.77</bcprov-jdk18on.version>
         <mapstruct.version>1.5.5.Final</mapstruct.version>
+        <lombok-mapstruct.version>0.2.0</lombok-mapstruct.version>
+        <caffeine.version>3.1.8</caffeine.version>
+        <okhttp.version>4.12.0</okhttp.version>
+        <resilience4j.version>2.2.0</resilience4j.version>
+        <!-- Jackson 版本与 Spring Boot 3.2.5 自带一致(BOM 中 jackson-bom=2.15.4)
+             自定义 blackbird 版本号与之一致,避免 NativeImageUtil 类不兼容 -->
     </properties>
 
-    <dependencies>
-        <!-- Web / Validation / Actuator -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-validation</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-websocket</artifactId>
-        </dependency>
+    <!-- 依赖版本锁定:子模块声明 <dependency> 时一律不用 <version> -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- ===== 业务模块内部依赖 ===== -->
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-tunnel</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-console</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
-        <!-- 配置库 JPA + 迁移 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-mysql</artifactId>
-        </dependency>
+            <!-- ===== SSH ===== -->
+            <dependency>
+                <groupId>com.github.mwiede</groupId>
+                <artifactId>jsch</artifactId>
+                <version>${jsch.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcprov-jdk18on</artifactId>
+                <version>${bcprov-jdk18on.version}</version>
+            </dependency>
 
-        <!-- 数据库驱动(运行时,H2 dev / MySQL prod 由 profile 选择) -->
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>runtime</scope>
-        </dependency>
+            <!-- ===== 对象映射 ===== -->
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct</artifactId>
+                <version>${mapstruct.version}</version>
+            </dependency>
 
-        <!-- SSH 隧道(mwiede/jsch 活跃 fork,替换 jcraft 0.1.55) -->
-        <dependency>
-            <groupId>com.github.mwiede</groupId>
-            <artifactId>jsch</artifactId>
-            <version>${jsch.version}</version>
-        </dependency>
+            <!-- ===== 缓存 ===== -->
+            <dependency>
+                <groupId>com.github.ben-manes.caffeine</groupId>
+                <artifactId>caffeine</artifactId>
+                <version>${caffeine.version}</version>
+            </dependency>
 
-        <!-- 降级容错 -->
-        <dependency>
-            <groupId>io.github.resilience4j</groupId>
-            <artifactId>resilience4j-spring-boot3</artifactId>
-            <version>${resilience4j.version}</version>
-        </dependency>
+            <!-- ===== HTTP 客户端 ===== -->
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
+            </dependency>
 
-        <!-- 本地缓存 -->
-        <dependency>
-            <groupId>com.github.ben-manes.caffeine</groupId>
-            <artifactId>caffeine</artifactId>
-        </dependency>
+            <!-- ===== 容错限流 ===== -->
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-spring-boot3</artifactId>
+                <version>${resilience4j.version}</version>
+            </dependency>
 
-        <!-- Redis 连接池(Lettuce + commons-pool2,三期用,提前引入) -->
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-pool2</artifactId>
-        </dependency>
+        </dependencies>
+    </dependencyManagement>
 
-        <!-- Lombok -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <!-- MapStruct DTO 映射(编译期生成) -->
-        <dependency>
-            <groupId>org.mapstruct</groupId>
-            <artifactId>mapstruct</artifactId>
-            <version>${mapstruct.version}</version>
-        </dependency>
-
-        <!-- Test -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
+    <!-- 共享的编译插件配置:同时被所有子模块直接生效(不写 pluginManagement 避免每个子模块重复声明插件) -->
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <configuration>
-                    <excludes>
-                        <exclude>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                    <release>21</release>
                     <annotationProcessorPaths>
-                        <!-- Lombok 必须在 MapStruct 之前,确保 MapStruct 看到的是 Lombok 生成的方法 -->
                         <path>
                             <groupId>org.projectlombok</groupId>
                             <artifactId>lombok</artifactId>
@@ -147,13 +138,30 @@
                             <artifactId>mapstruct-processor</artifactId>
                             <version>${mapstruct.version}</version>
                         </path>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok-mapstruct-binding</artifactId>
+                            <version>${lombok-mapstruct.version}</version>
+                        </path>
                     </annotationProcessorPaths>
-                    <compilerArgs>
-                        <arg>-Amapstruct.defaultComponentModel=spring</arg>
-                        <arg>-Amapstruct.unmappedTargetPolicy=IGNORE</arg>
-                    </compilerArgs>
                 </configuration>
             </plugin>
         </plugins>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <configuration>
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
     </build>
 </project>
