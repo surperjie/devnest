@@ -111,13 +111,14 @@ public class DataSourceServiceImpl implements DataSourceService {
 
     /** 构建 JDBC URL,通过隧道时 host=127.0.0.1 + 转发端口 */
     String buildJdbcUrl(DataSourceConfig ds, String effectiveHost) {
+        String dbName = (ds.getDatabaseName() == null || ds.getDatabaseName().isBlank())
+                ? "" : ds.getDatabaseName();
         if ("MYSQL".equalsIgnoreCase(ds.getDbType())) {
-            return "jdbc:mysql://" + effectiveHost + ":" + ds.getPort() + "/"
-                    + ds.getDatabaseName()
-                    + "?useUnicode=true&characterEncoding=utf8mb4&serverTimezone=Asia/Shanghai&useSSL=false";
+            return "jdbc:mysql://" + effectiveHost + ":" + ds.getPort() + "/" + dbName
+                    + "?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false";
         }
         if ("DM".equalsIgnoreCase(ds.getDbType())) {
-            return "jdbc:dm://" + effectiveHost + ":" + ds.getPort() + "/" + ds.getDatabaseName();
+            return "jdbc:dm://" + effectiveHost + ":" + ds.getPort() + "/" + dbName;
         }
         throw new BizException(ErrorCode.DATASOURCE_UNSUPPORTED_TYPE, ds.getDbType());
     }

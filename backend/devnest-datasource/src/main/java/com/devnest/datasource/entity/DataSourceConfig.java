@@ -43,7 +43,7 @@ public class DataSourceConfig extends BaseEntity {
     @Column(name = "port", nullable = false)
     private Integer port = 3306;
 
-    @Column(name = "database_name", nullable = false, length = 128)
+    @Column(name = "database_name", length = 128)
     private String databaseName;
 
     @Column(name = "username", nullable = false, length = 64)

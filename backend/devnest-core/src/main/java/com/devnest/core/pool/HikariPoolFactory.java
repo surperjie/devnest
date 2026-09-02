@@ -152,7 +152,7 @@ public class HikariPoolFactory {
         cfg.setValidationTimeout(Math.min(connectTimeoutMs, 1000));
         // UTF-8 & 服务端预处理,适配 MySQL 8/DM 8
         cfg.addDataSourceProperty("useUnicode", "true");
-        cfg.addDataSourceProperty("characterEncoding", "utf8mb4");
+        cfg.addDataSourceProperty("characterEncoding", "UTF-8");
         cfg.addDataSourceProperty("serverTimezone", "Asia/Shanghai");
         cfg.addDataSourceProperty("useSSL", "false");
         return cfg;

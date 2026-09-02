@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { datasourceApi } from "../../api/datasource";
 import { tunnelApi } from "../../api/tunnel";
+import DataSourceFormDialog from "./DataSourceFormDialog.vue";
 
 const router = useRouter();
 const list = ref([]);

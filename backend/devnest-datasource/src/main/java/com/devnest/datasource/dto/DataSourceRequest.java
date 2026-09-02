@@ -20,7 +20,7 @@ public class DataSourceRequest {
     private String host;
     @NotNull(message = "端口不能为空")
     private Integer port;
-    @NotBlank(message = "库名不能为空")
+    /** 库名,留空则可查看整个数据库服务器的所有库 */
     private String databaseName;
     @NotBlank(message = "用户名不能为空")
     private String username;

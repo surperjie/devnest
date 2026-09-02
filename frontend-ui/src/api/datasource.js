@@ -14,9 +14,9 @@ export const datasourceApi = {
   // 库表结构
   getSchema: (id) => http.get(`/datasource/${id}/schema`),
   // 数据预览
-  preview: (id, table, page = 0, size = 50) =>
-    http.get(`/datasource/${id}/preview`, { params: { table, page, size } }),
-  // SQL 执行
+  preview: (id, table, database = null, page = 0, size = 50) =>
+    http.get(`/datasource/${id}/preview`, { params: { database, table, page, size } }),
+  // 执行 SQL(支持多语句,返回多个结果集)
   executeSql: (id, sql, maxRows = 200) =>
     http.post(`/datasource/${id}/sql`, { sql, maxRows }),
   // SQL 历史

@@ -1,6 +1,7 @@
 package com.devnest.datasource.api;
 
 import com.devnest.common.response.ApiResult;
+import com.devnest.datasource.dto.MultiSqlResult;
 import com.devnest.datasource.dto.SchemaNode;
 import com.devnest.datasource.dto.SqlLogDto;
 import com.devnest.datasource.dto.TableDataResult;
@@ -33,19 +34,20 @@ public class DatabaseController {
         return ApiResult.ok(queryService.getSchemaTree(dsId));
     }
 
-    /** 分页预览表数据 */
+    /** 分页预览表数据(可指定库名) */
     @GetMapping("/preview")
     public ApiResult<TableDataResult> preview(
             @PathVariable Long dsId,
+            @RequestParam(required = false) String database,
             @RequestParam String table,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
-        return ApiResult.ok(queryService.previewTable(dsId, table, page, size));
+        return ApiResult.ok(queryService.previewTable(dsId, database, table, page, size));
     }
 
-    /** 执行只读 SQL(经白名单校验) */
+    /** 执行 SQL(支持多语句,经黑名单校验,返回多个结果集) */
     @PostMapping("/sql")
-    public ApiResult<TableDataResult> executeSql(
+    public ApiResult<MultiSqlResult> executeSql(
             @PathVariable Long dsId,
             @RequestBody Map<String, Object> body) {
         String sql = (String) body.get("sql");

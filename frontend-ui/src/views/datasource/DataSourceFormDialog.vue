@@ -126,7 +126,7 @@ const onCancel = () => emit("update:modelValue", false);
         <el-input-number v-model="form.port" :min="1" :max="65535" />
       </el-form-item>
       <el-form-item label="库名" prop="databaseName">
-        <el-input v-model="form.databaseName" placeholder="如:test_db" />
+        <el-input v-model="form.databaseName" placeholder="留空可查看所有库" />
       </el-form-item>
       <el-form-item label="用户名" prop="username">
         <el-input v-model="form.username" />
