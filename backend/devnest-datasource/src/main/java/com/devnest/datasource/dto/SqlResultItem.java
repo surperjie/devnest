@@ -20,6 +20,8 @@ public class SqlResultItem {
     private String sql;
     /** 列名(SELECT 时有值) */
     private List<String> columns;
+    /** 列注释(顺序与 columns 对齐,无注释为 null) */
+    private List<String> columnComments;
     /** 数据行(SELECT 时有值) */
     private List<Map<String, Object>> rows;
     /** 影响行数(DML 时有值) */

@@ -17,6 +17,8 @@ import java.util.Map;
 public class TableDataResult {
     /** 列名列表 */
     private List<String> columns;
+    /** 列注释(顺序与 columns 对齐,无注释为 null) */
+    private List<String> columnComments;
     /** 数据行(每行 key=列名 value=单元格值) */
     private List<Map<String, Object>> rows;
     /** 总行数(分页时) */

@@ -165,6 +165,10 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
             ps.setFetchSize(Math.min(size, 200));
             try (ResultSet rs = ps.executeQuery()) {
                 result = extractResult(rs, size);
+                // 填充列注释(从 TABLE_SCHEMA 精确匹配)
+                String cat = database != null && !database.isBlank() ? database
+                        : (conn.getCatalog() == null ? "" : conn.getCatalog());
+                result.setColumnComments(loadColumnComments(conn, cat, tableName, result.getColumns()));
             }
         } catch (SQLException e) {
             throw new BizException(ErrorCode.SQL_EXECUTE_FAILED, e.getMessage());
@@ -225,8 +229,18 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
                         ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
                     ps.setFetchSize(Math.min(maxRows, 200));
                     try (ResultSet rs = ps.executeQuery()) {
-                        item.setColumns(extractColumns(rs));
+                        ResultSetMetaData meta = rs.getMetaData();
+                        List<String> cols = extractColumns(rs);
+                        item.setColumns(cols);
                         item.setRows(extractRows(rs, maxRows));
+                        // 尝试从元数据中获取库/表,从而加载列注释
+                        if (!cols.isEmpty()) {
+                            String cat = conn.getCatalog() == null ? "" : conn.getCatalog();
+                            String tbl = meta.getTableName(1) == null ? "" : meta.getTableName(1);
+                            if (!cat.isEmpty() && !tbl.isEmpty()) {
+                                item.setColumnComments(loadColumnComments(conn, cat, tbl, cols));
+                            }
+                        }
                     }
                 }
             } else {
@@ -298,6 +312,53 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
             rows.add(row);
         }
         return rows;
+    }
+
+    /**
+     * 从 INFORMATION_SCHEMA.COLUMNS 加载指定库/表的列注释,按列名返回列表(顺序与传入 columns 对齐,找不到则为 null).
+     */
+    private List<String> loadColumnComments(Connection conn, String catalog, String table, List<String> columns) {
+        List<String> comments = new ArrayList<>(columns.size());
+        if (columns == null || columns.isEmpty() || catalog == null || catalog.isEmpty() || table == null || table.isEmpty()) {
+            for (int i = 0; i < (columns == null ? 0 : columns.size()); i++) comments.add(null);
+            return comments;
+        }
+        Map<String, String> map = new HashMap<>(columns.size());
+        // 同时支持 MySQL 和达梦:MySQL 用 INFORMATION_SCHEMA.COLUMNS.COLUMN_COMMENT
+        // 先用 JDBC DatabaseMetaData 通用方式(可达 80% 覆盖率),失败再退化为 SQL 查询
+        try {
+            DatabaseMetaData meta = conn.getMetaData();
+            try (ResultSet rs = meta.getColumns(catalog, null, table, "%")) {
+                while (rs.next()) {
+                    String col = rs.getString("COLUMN_NAME");
+                    String remark = rs.getString("REMARKS");
+                    if (col != null) map.put(col, remark);
+                }
+            }
+            // 如果 JDBC REMARKS 全为空,再从 INFORMATION_SCHEMA.COLUMNS 读(MySQL)
+            if (map.values().stream().allMatch(v -> v == null || v.isEmpty())) {
+                String query = "SELECT COLUMN_NAME, COLUMN_COMMENT " +
+                        "FROM INFORMATION_SCHEMA.COLUMNS " +
+                        "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
+                try (java.sql.PreparedStatement ps = conn.prepareStatement(query)) {
+                    ps.setString(1, catalog);
+                    ps.setString(2, table);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            String col = rs.getString(1);
+                            String cm = rs.getString(2);
+                            if (col != null && cm != null && !cm.isEmpty()) {
+                                map.put(col, cm);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("加载列注释失败: {}", e.getMessage());
+        }
+        for (String c : columns) comments.add(map.get(c));
+        return comments;
     }
 
     // ==================== SQL 日志 ====================
