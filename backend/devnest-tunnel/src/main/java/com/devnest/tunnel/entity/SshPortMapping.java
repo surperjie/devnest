@@ -47,4 +47,11 @@ public class SshPortMapping extends BaseEntity {
 
     @Column(name = "label", length = 64)
     private String label;
+
+    /**
+     * 上次启动状态:1=用户启动(重启服务时应自动恢复),0=停止(启动时不连).
+     * 启动成功后置 true,用户 stopTunnel 置 false,心跳/重连达到上限断开也置 false.
+     */
+    @Column(name = "last_running", nullable = false)
+    private Boolean lastRunning = Boolean.FALSE;
 }

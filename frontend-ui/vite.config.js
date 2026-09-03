@@ -22,6 +22,20 @@ export default defineConfig({
     host,
     port,
     strictPort: true,
+    proxy: {
+      // REST API → 后端
+      "/api": {
+        target: "http://127.0.0.1:8080",
+        changeOrigin: true,
+      },
+      // WebSocket (/ws/console/{id}) → 后端(双保险).
+      // 前端默认直连 8080(和昨天的版本行为一致);如果将来改为同源连接,也能自动代理.
+      "/ws": {
+        target: "ws://127.0.0.1:8080",
+        changeOrigin: true,
+        ws: true,
+      },
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {

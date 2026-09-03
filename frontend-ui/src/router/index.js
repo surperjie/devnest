@@ -32,10 +32,18 @@ const routes = [
         component: () => import("../views/datasource/DatabaseExplorer.vue"),
         meta: { title: "数据库浏览器", icon: "Coin", hidden: true },
       },
-      // 后续模块路由占位:
-      // { path: "redis", name: "redis", component: ..., meta: { title: "Redis", icon: "Key" } },
-      // { path: "http", name: "http", component: ..., meta: { title: "HTTP 调试", icon: "Promotion" } },
-      // { path: "ai", name: "ai", component: ..., meta: { title: "AI 配置", icon: "MagicStick" } },
+      {
+        path: "redis",
+        name: "redis",
+        component: () => import("../views/redis/RedisList.vue"),
+        meta: { title: "Redis", icon: "Key" },
+      },
+      {
+        path: "redis/:id/explorer",
+        name: "redis-explorer",
+        component: () => import("../views/redis/RedisExplorer.vue"),
+        meta: { title: "Redis 浏览器", icon: "Key", hidden: true },
+      },
     ],
   },
 ];

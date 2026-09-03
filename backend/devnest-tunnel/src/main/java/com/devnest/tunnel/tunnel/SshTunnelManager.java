@@ -6,6 +6,7 @@ import com.devnest.common.exception.ErrorCode;
 import com.devnest.tunnel.config.TunnelProperties;
 import com.devnest.tunnel.entity.SshBastion;
 import com.devnest.tunnel.entity.SshPortMapping;
+import com.devnest.tunnel.model.TunnelState;
 import com.devnest.tunnel.port.PortAllocator;
 import com.devnest.tunnel.repository.SshBastionRepository;
 import com.devnest.tunnel.repository.SshPortMappingRepository;
@@ -70,20 +71,42 @@ public class SshTunnelManager {
         }
         SshTunnelInstance inst = new SshTunnelInstance(
                 bastion, mappings, props, portAllocator, crypto, virtualExecutor);
+        inst.setLifecycleListener(this::onInstanceStateChanged);
         inst.start();
         instances.put(bastionId, inst);
         return inst;
     }
 
     /**
-     * 停止指定跳板的隧道.
+     * 根据隧道实例的状态回调,写入 ssh_port_mapping.last_running 持久字段.
+     * RUNNING=已启动(下次重启恢复);ERROR/CLOSED=未启动(下次重启不恢复).
+     * 注意:写库事务直接挂在 Repository 方法上(见 SshPortMappingRepository.updateLastRunningByBastionId),
+     * 因此此处不需要也不应该加 @Transactional(避免 this 自调用使 AOP 代理失效).
+     */
+    public void onInstanceStateChanged(Long bastionId, TunnelState newState, String detail) {
+        if (bastionId == null) return;
+        try {
+            if (newState == TunnelState.RUNNING) {
+                int rows = mappingRepo.updateLastRunningByBastionId(bastionId, Boolean.TRUE);
+                log.info("bastion={} lastRunning 更新为 true, {} 条记录受影响 ({})", bastionId, rows, detail);
+            } else if (newState == TunnelState.ERROR || newState == TunnelState.CLOSED) {
+                int rows = mappingRepo.updateLastRunningByBastionId(bastionId, Boolean.FALSE);
+                log.info("bastion={} lastRunning 更新为 false, {} 条记录受影响 ({})", bastionId, rows, detail);
+            }
+        } catch (Exception e) {
+            log.warn("更新 lastRunning 失败(bastion={}, state={}): {}", bastionId, newState, e.getMessage());
+        }
+    }
+
+    /**
+     * 停止指定跳板的隧道.用户主动调用 → 持久化 lastRunning=false.
      */
     public void stopTunnel(Long bastionId) {
         SshTunnelInstance inst = instances.remove(bastionId);
         if (inst == null) {
             throw new BizException(ErrorCode.TUNNEL_NOT_RUNNING);
         }
-        inst.stop();
+        inst.stop(true);
     }
 
     public SshTunnelInstance getInstance(Long bastionId) {
@@ -96,11 +119,12 @@ public class SshTunnelManager {
 
     /**
      * 程序退出时统一销毁所有隧道(JVM 钩子触发).
+     * 不更新 lastRunning:保持用户上次点击启动的状态,下次服务启动会通过 TunnelBootstrapRunner 继承恢复.
      */
     @PreDestroy
     public void stopAll() {
-        log.info("退出前销毁所有 SSH 隧道,共 {} 个", instances.size());
-        instances.values().forEach(SshTunnelInstance::stop);
+        log.info("退出前销毁所有 SSH 隧道,共 {} 个(lastRunning 不改动,用于启动继承)", instances.size());
+        instances.values().forEach(inst -> inst.stop(false));
         instances.clear();
     }
 }

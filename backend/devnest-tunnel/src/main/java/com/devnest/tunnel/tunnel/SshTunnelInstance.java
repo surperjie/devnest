@@ -36,6 +36,13 @@ public class SshTunnelInstance {
 
     private static final Logger log = LoggerFactory.getLogger(SshTunnelInstance.class);
 
+    /** 生命周期回调:启动成功/关闭/失败时,外部(Manager)可用来持久化 lastRunning 等状态. */
+    @FunctionalInterface
+    public interface LifecycleListener {
+        /** 状态变化回调,bastionId 一定有值,newState 是新的状态. */
+        void onStateChanged(Long bastionId, TunnelState newState, String detail);
+    }
+
     private final SshBastion bastion;
     private final List<SshPortMapping> mappings;
     private final TunnelProperties props;
@@ -51,6 +58,8 @@ public class SshTunnelInstance {
     /** 重连任务句柄,stop() 时取消,避免关闭隧道后还在重连 */
     private volatile Future<?> reconnectTask;
     private volatile int reconnectCount = 0;
+    /** 生命周期回调(可选),Manager 注入用来写 lastRunning 持久字段. */
+    private volatile LifecycleListener lifecycleListener;
 
     public SshTunnelInstance(SshBastion bastion,
                              List<SshPortMapping> mappings,
@@ -66,6 +75,19 @@ public class SshTunnelInstance {
         this.virtualExecutor = virtualExecutor;
     }
 
+    public void setLifecycleListener(LifecycleListener listener) {
+        this.lifecycleListener = listener;
+    }
+
+    private void fireStateChanged(TunnelState newState, String detail) {
+        try {
+            LifecycleListener l = lifecycleListener;
+            if (l != null) l.onStateChanged(bastion.getId(), newState, detail);
+        } catch (Exception e) {
+            log.warn("fireStateChanged 回调异常(忽略):{}", e.getMessage());
+        }
+    }
+
     /**
      * 启动隧道:分配端口 → 建立 SSH 会话 → 绑定端口转发 → 启动心跳.
      */
@@ -74,6 +96,7 @@ public class SshTunnelInstance {
             throw new BizException(ErrorCode.TUNNEL_ALREADY_RUNNING);
         }
         state = TunnelState.CONNECTING;
+        fireStateChanged(state, "建立 SSH 会话中");
         try {
             allocateLocalPorts();
             establishSession();
@@ -81,17 +104,22 @@ public class SshTunnelInstance {
             reconnectCount = 0;
             startHeartbeat();
             log.info("隧道[{}]启动成功,共 {} 条映射", bastion.getName(), mappings.size());
+            fireStateChanged(state, "启动成功");
         } catch (Exception e) {
             state = TunnelState.ERROR;
             rollbackPorts();
+            fireStateChanged(state, "启动失败:" + e.getMessage());
             throw new BizException(ErrorCode.TUNNEL_START_FAILED, e.getMessage());
         }
     }
 
     /**
      * 停止隧道:关心跳 → 断会话 → 释放端口.
+     *
+     * @param persistClosed  true=用户主动关闭(更新 lastRunning=false 持久入库,下次不继承)
+     *                       false=JVM 退出/内部非用户调用(保持 lastRunning 不变,下次启动仍会恢复)
      */
-    public synchronized void stop() {
+    public synchronized void stop(boolean persistClosed) {
         stopHeartbeat();
         // 取消当前实例挂起的重连任务(注意:绝不能 shutdown 全局 virtualExecutor)
         if (reconnectTask != null) {
@@ -103,7 +131,10 @@ public class SshTunnelInstance {
         }
         rollbackPorts();
         state = TunnelState.CLOSED;
-        log.info("隧道[{}]已关闭", bastion.getName());
+        log.info("隧道[{}]已关闭(persistClosed={})", bastion.getName(), persistClosed);
+        if (persistClosed) {
+            fireStateChanged(state, "用户主动关闭");
+        }
     }
 
     /**
@@ -116,6 +147,7 @@ public class SshTunnelInstance {
                 state = TunnelState.RUNNING;
                 reconnectCount = 0;
                 log.info("隧道[{}]重连成功", bastion.getName());
+                fireStateChanged(state, "自动重连成功");
                 return;
             } catch (Exception e) {
                 reconnectCount++;
@@ -123,6 +155,7 @@ public class SshTunnelInstance {
                 if (reconnectCount >= props.getMaxRetries()) {
                     state = TunnelState.ERROR;
                     log.error("隧道[{}]重连失败,已达最大次数,状态置 ERROR", bastion.getName());
+                    fireStateChanged(state, "重连达最大次数");
                     return;
                 }
                 try {
@@ -212,6 +245,7 @@ public class SshTunnelInstance {
                 log.warn("隧道[{}]心跳失败,触发异步重连", bastion.getName());
                 state = TunnelState.RECONNECTING;
                 reconnectCount = 0;
+                fireStateChanged(state, "心跳失败,正在重连");
                 reconnectTask = virtualExecutor.submit(this::reconnect);
             }
         } catch (Exception e) {

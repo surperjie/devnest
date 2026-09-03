@@ -21,6 +21,7 @@
         <module>devnest-tunnel</module>
         <module>devnest-console</module>
         <module>devnest-datasource</module>
+        <module>devnest-redis</module>
         <module>devnest-boot</module>
     </modules>
 
@@ -46,6 +47,12 @@
         <caffeine.version>3.1.8</caffeine.version>
         <okhttp.version>4.12.0</okhttp.version>
         <resilience4j.version>2.2.0</resilience4j.version>
+        <!-- Redis Jedis:4.4.6 兼容 Java 21,Spring Boot BOM 未锁,自己管理 -->
+        <jedis.version>4.4.6</jedis.version>
+        <!-- 达梦 JDBC 驱动 8.x(DM8),Maven 中央无官方包,需手动 install 到本地或私服,
+             坐标参考:mvn install:install-file -Dfile=DmJdbcDriver18.jar
+                -DgroupId=com.dameng -DartifactId=DmJdbcDriver18 -Dversion=8.1.3.62 -Dpackaging=jar -->
+        <dm-jdbc.version>8.1.3.62</dm-jdbc.version>
         <!-- Jackson 版本与 Spring Boot 3.2.5 自带一致(BOM 中 jackson-bom=2.15.4)
              自定义 blackbird 版本号与之一致,避免 NativeImageUtil 类不兼容 -->
     </properties>
@@ -79,6 +86,11 @@
                 <artifactId>devnest-datasource</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-redis</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
             <!-- ===== SSH ===== -->
             <dependency>
@@ -90,6 +102,20 @@
                 <groupId>org.bouncycastle</groupId>
                 <artifactId>bcprov-jdk18on</artifactId>
                 <version>${bcprov-jdk18on.version}</version>
+            </dependency>
+
+            <!-- ===== Redis ===== -->
+            <dependency>
+                <groupId>redis.clients</groupId>
+                <artifactId>jedis</artifactId>
+                <version>${jedis.version}</version>
+            </dependency>
+
+            <!-- ===== 达梦 DM8 JDBC(需要用户本地安装,可选) ===== -->
+            <dependency>
+                <groupId>com.dameng</groupId>
+                <artifactId>DmJdbcDriver18</artifactId>
+                <version>${dm-jdbc.version}</version>
             </dependency>
 
             <!-- ===== 对象映射 ===== -->

@@ -47,6 +47,9 @@ public class DataSourceServiceImpl implements DataSourceService {
         if (repo.existsByName(req.getName())) {
             throw new BizException(ErrorCode.DATASOURCE_NAME_DUPLICATED);
         }
+        if (req.getPassword() == null || req.getPassword().isBlank()) {
+            throw new BizException(ErrorCode.PARAM_INVALID, "新增数据源必须填写密码");
+        }
         DataSourceConfig entity = new DataSourceConfig();
         applyRequest(entity, req);
         return mapper.toDto(repo.save(entity));
@@ -93,7 +96,10 @@ public class DataSourceServiceImpl implements DataSourceService {
         entity.setPort(req.getPort());
         entity.setDatabaseName(req.getDatabaseName());
         entity.setUsername(req.getUsername());
-        entity.setPasswordCipher(crypto.encrypt(req.getPassword()));
+        // 密码:有值才加密更新,空值表示不修改(编辑场景)
+        if (req.getPassword() != null && !req.getPassword().isBlank()) {
+            entity.setPasswordCipher(crypto.encrypt(req.getPassword()));
+        }
         entity.setTunnelBastionId(req.getTunnelBastionId());
         entity.setRemark(req.getRemark());
     }
@@ -118,7 +124,12 @@ public class DataSourceServiceImpl implements DataSourceService {
                     + "?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false";
         }
         if ("DM".equalsIgnoreCase(ds.getDbType())) {
-            return "jdbc:dm://" + effectiveHost + ":" + ds.getPort() + "/" + dbName;
+            // DM:显式带上 schema 参数,避免默认连到 SYS 用户模式(无业务表)
+            String url = "jdbc:dm://" + effectiveHost + ":" + ds.getPort();
+            if (!dbName.isEmpty()) {
+                url += "/" + dbName + "?schema=" + dbName;
+            }
+            return url;
         }
         throw new BizException(ErrorCode.DATASOURCE_UNSUPPORTED_TYPE, ds.getDbType());
     }

@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { consoleApi } from "../../api/console";
 
 const props = defineProps({ row: Object });
 const emit = defineEmits(["close"]);
@@ -105,7 +106,32 @@ const init = async () => {
   fitAddon.value.fit();
   term.value.writeln(`\x1b[36m正在连接到 ${props.row?.name}...\x1b[0m`);
 
-  const url = `ws://127.0.0.1:8080/ws/console/${props.row.id}`;
+  // 先申请一次性 WS token (TOFU 30s TTL,后端架构升级后强制校验)
+  let token;
+  try {
+    token = await consoleApi.issueWsToken(props.row.id);
+    term.value.writeln("\x1b[90m[TOFU] 握手令牌已获取,建立 WebSocket...\x1b[0m");
+  } catch (e) {
+    term.value.writeln(`\r\n\x1b[31m[令牌申请失败] ${e.message || e}\x1b[0m`);
+    term.value.writeln("\x1b[31m[连接已关闭]\x1b[0m");
+    return;
+  }
+
+  // WebSocket base 选择:优先用环境变量显式指定的后端,否则默认直连本地 8080
+  // (和昨天的版本保持一致的默认行为,避免走到 Vite dev server 5173 但 /ws 没代理的坑)
+  let wsBase = "ws://127.0.0.1:8080";
+  try {
+    const apiBase = import.meta.env.VITE_API_BASE_URL;
+    if (apiBase && (apiBase.startsWith("http://") || apiBase.startsWith("https://"))) {
+      // 显式配置了远程后端:保持协议(host 对应用户部署的地址)
+      const u = new URL(apiBase);
+      wsBase = (u.protocol === "https:" ? "wss://" : "ws://") + u.host;
+    }
+  } catch (e) {
+    wsBase = "ws://127.0.0.1:8080";
+  }
+  const url = `${wsBase}/ws/console/${props.row.id}?token=${encodeURIComponent(token)}`;
+  term.value.writeln(`\x1b[90m[TOFU] 连接目标: ${url.replace(/token=[^&]+/, "token=***")}\x1b[0m`);
   ws.value = new WebSocket(url);
 
   ws.value.onopen = () => {
@@ -118,10 +144,11 @@ const init = async () => {
     }
   };
   ws.value.onerror = () => {
-    term.value?.writeln("\r\n\x1b[31m[连接错误]\x1b[0m");
+    term.value?.writeln("\r\n\x1b[31m[连接错误] 请检查后端日志或令牌有效期\x1b[0m");
   };
-  ws.value.onclose = () => {
-    term.value?.writeln("\r\n\x1b[31m[连接已关闭]\x1b[0m");
+  ws.value.onclose = (ev) => {
+    const extra = (ev && (ev.code || ev.reason)) ? ` (code=${ev.code} ${ev.reason || ""})` : "";
+    term.value?.writeln(`\r\n\x1b[31m[连接已关闭]${extra}\x1b[0m`);
   };
 
   term.value.onData((data) => {

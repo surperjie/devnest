@@ -9,7 +9,7 @@ const menus = [
   { index: "/tunnel", title: "SSH 隧道", icon: "Connection", disabled: false },
   { index: "/console", title: "远程控制台", icon: "Monitor", disabled: false },
   { index: "/datasource", title: "数据源", icon: "Coin", disabled: false },
-  { index: "/redis", title: "Redis", icon: "Key", disabled: true },
+  { index: "/redis", title: "Redis", icon: "Key", disabled: false },
   { index: "/http", title: "HTTP 调试", icon: "Promotion", disabled: true },
   { index: "/ai", title: "AI 配置", icon: "MagicStick", disabled: true },
 ];
