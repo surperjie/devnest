@@ -1,13 +1,13 @@
 /// DevNest 桌面应用 Rust 入口.
 ///
 /// 职责:
-/// - 启动时拉起后端 Spring Boot jar(通过 java -jar)
+/// - 启动时拉起后端 Spring Boot jar(优先使用打包 JRE 21,回退系统 java)
 /// - 窗口关闭时自动结束后端进程,避免残留
-/// - 全程写日志到 %TEMP%/devnest-app.log 便于排查
+/// - 全程写日志到 %TEMP%/devnest-app.log(每次启动清空)
 ///
 /// @Author Ajiejiejie
 /// @Date 2026/9/7 10:00
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::TcpStream;
 use std::process::{Child, Command};
@@ -20,17 +20,21 @@ use tauri::Manager;
 static BACKEND_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
 /// 后端监听端口
-const BACKEND_PORT: u16 = 8080;
+const BACKEND_PORT: u16 = 38080;
 /// 后端 jar 文件名
 const BACKEND_JAR: &str = "devnest-boot.jar";
+/// 打包 JRE 目录名
+const BUNDLED_JRE_DIR: &str = "jre21";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 启动前清空上次日志
+    clear_log();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // 启动后端进程(独立线程,避免阻塞 async runtime)
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 start_backend(&handle);
@@ -38,7 +42,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 主窗口关闭时杀掉后端进程
             if let tauri::WindowEvent::Destroyed = event {
                 stop_backend();
             }
@@ -71,15 +74,27 @@ fn log_file_path() -> Option<std::path::PathBuf> {
     Some(dir.join("devnest-app.log"))
 }
 
+/// 每次启动时清空日志文件,避免无限增长
+fn clear_log() {
+    if let Some(path) = log_file_path() {
+        let _ = fs::write(&path, "");
+    }
+}
+
 // ========================================================================
-// 错误弹窗:在 GUI 中无法看到 stderr,用 dialog 提示
+// 错误弹窗
 // ========================================================================
 
 fn show_error_dialog(app: &tauri::AppHandle, title: &str, message: &str) {
     use tauri_plugin_dialog::DialogExt;
     log(&format!("ERROR DIALOG: {title} | {message}"));
     app.dialog()
-        .message(format!("{message}\n\nLog: {}", log_file_path().map(|p| p.display().to_string()).unwrap_or_default()))
+        .message(format!(
+            "{message}\n\nLog: {}",
+            log_file_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        ))
         .title(title)
         .show(|_| {});
 }
@@ -91,37 +106,37 @@ fn show_error_dialog(app: &tauri::AppHandle, title: &str, message: &str) {
 fn start_backend(app: &tauri::AppHandle) {
     log("=== DevNest backend startup ===");
 
-    // 1. 端口已被监听 → 后端已在运行,无需重复启动
     if is_port_in_use(BACKEND_PORT) {
-        log("Port 8080 already in use, assuming backend is running");
+        log(&format!("Port {BACKEND_PORT} already in use, assuming backend is running"));
         return;
     }
-    log("Port 8080 is free, starting backend...");
+    log(&format!("Port {BACKEND_PORT} is free, starting backend..."));
 
-    // 2. 查找 java
-    let java = match find_java() {
+    // 1. 查找 java:优先打包 JRE,其次系统 java
+    let java = match find_java(app) {
         Some(j) => {
-            log(&format!("Found java: {j:?}"));
+            log(&format!("Using java: {j:?}"));
             j
         }
         None => {
-            log("ERROR: java not found in JAVA_HOME or PATH");
+            log("ERROR: java not found (checked bundled JRE, JAVA_HOME, PATH)");
             show_error_dialog(
                 app,
                 "Backend startup failed",
-                "Java not found.\nPlease install JDK 21 and set JAVA_HOME or add java to PATH.",
+                "Java not found.\nThe app tried bundled JRE, JAVA_HOME, and PATH.\nPlease install JDK 21.",
             );
             return;
         }
     };
 
-    // 3. 解析 jar 路径
-    let jar_path = resolve_jar_path(app);
-    match &jar_path {
-        Some(path) => log(&format!("Backend jar: {path:?}")),
+    // 2. 解析 jar 路径
+    let jar_path = match resolve_jar_path(app) {
+        Some(path) => {
+            log(&format!("Backend jar: {path:?}"));
+            path
+        }
         None => {
             log("ERROR: jar not found in any location");
-            // 列出搜索过的路径
             log(&format!("  Checked resource_dir: {:?}", app.path().resource_dir().ok()));
             if let Ok(exe) = std::env::current_exe() {
                 log(&format!("  exe dir: {:?}", exe.parent()));
@@ -133,17 +148,19 @@ fn start_backend(app: &tauri::AppHandle) {
             );
             return;
         }
-    }
+    };
 
-    let jar_path = jar_path.unwrap();
-
-    // 4. 启动后端
-    log(&format!("Starting: {java:?} -jar {:?} --spring.profiles.active=dev", jar_path));
+    // 3. 启动后端
+    log(&format!(
+        "Starting: {java:?} -jar {:?} --spring.profiles.active=dev --server.port={BACKEND_PORT}",
+        jar_path
+    ));
     let child = Command::new(&java)
         .args([
             "-jar",
             jar_path.to_str().unwrap(),
             "--spring.profiles.active=dev",
+            &format!("--server.port={BACKEND_PORT}"),
         ])
         .spawn();
 
@@ -159,12 +176,11 @@ fn start_backend(app: &tauri::AppHandle) {
         }
     }
 
-    // 5. 等待后端就绪(最多 30s)
+    // 4. 等待后端就绪(最多 30s)
     log("Waiting for backend to be ready (max 30s)...");
     wait_for_backend_ready(30);
 }
 
-/// 窗口关闭时杀掉后端进程
 fn stop_backend() {
     log("=== DevNest backend shutdown ===");
     let mut guard = BACKEND_PROCESS.lock().unwrap();
@@ -174,7 +190,7 @@ fn stop_backend() {
         let _ = child.wait();
         log("Backend process terminated");
     } else {
-        log("No backend process to kill (was not started or already exited)");
+        log("No backend process to kill");
     }
 }
 
@@ -199,45 +215,40 @@ fn wait_for_backend_ready(timeout_secs: u64) {
     log(&format!("WARNING: backend not ready after {timeout_secs}s"));
 }
 
-/// 解析后端 jar 路径(尝试多个可能的位置):
-/// 1. resource_dir/devnest-boot.jar (Tauri 打包场景)
-/// 2. resource_dir/resources/devnest-boot.jar (可能保留目录结构)
-/// 3. exe_dir/resources/devnest-boot.jar (NSIS 安装目录)
-/// 4. exe_dir/devnest-boot.jar (同目录)
-/// 5. 开发环境: backend/devnest-boot/target/devnest-boot-1.0.0.jar
+/// 解析后端 jar 路径(尝试多个可能的位置)
 fn resolve_jar_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     // 1. resource_dir/devnest-boot.jar
     if let Ok(dir) = app.path().resource_dir() {
         let p = dir.join(BACKEND_JAR);
-        log(&format!("  Checking: {p:?} -> {}", p.exists()));
+        log(&format!("  Checking jar: {p:?} -> {}", p.exists()));
         if p.exists() {
             return Some(p);
         }
         // 2. resource_dir/resources/devnest-boot.jar
         let p2 = dir.join("resources").join(BACKEND_JAR);
-        log(&format!("  Checking: {p2:?} -> {}", p2.exists()));
+        log(&format!("  Checking jar: {p2:?} -> {}", p2.exists()));
         if p2.exists() {
             return Some(p2);
         }
     }
 
-    // 3 & 4. exe 同目录
+    // 3. exe 同目录
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let p = exe_dir.join("resources").join(BACKEND_JAR);
-            log(&format!("  Checking: {p:?} -> {}", p.exists()));
+            log(&format!("  Checking jar: {p:?} -> {}", p.exists()));
             if p.exists() {
                 return Some(p);
             }
             let p = exe_dir.join(BACKEND_JAR);
-            log(&format!("  Checking: {p:?} -> {}", p.exists()));
+            log(&format!("  Checking jar: {p:?} -> {}", p.exists()));
             if p.exists() {
                 return Some(p);
             }
         }
     }
 
-    // 5. 开发环境
+    // 4. 开发环境
     let dev_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -245,7 +256,7 @@ fn resolve_jar_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         .join("devnest-boot")
         .join("target")
         .join("devnest-boot-1.0.0.jar");
-    log(&format!("  Checking: {dev_path:?} -> {}", dev_path.exists()));
+    log(&format!("  Checking jar: {dev_path:?} -> {}", dev_path.exists()));
     if dev_path.exists() {
         return Some(dev_path);
     }
@@ -253,14 +264,43 @@ fn resolve_jar_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     None
 }
 
-/// 查找 java 可执行文件:优先 JAVA_HOME,其次 PATH
-fn find_java() -> Option<std::path::PathBuf> {
-    // JAVA_HOME
+/// 查找 java 可执行文件:
+/// 1. 打包 JRE (resource_dir/jre21/bin/java.exe)
+/// 2. JAVA_HOME
+/// 3. PATH
+fn find_java(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let exe_name = if cfg!(windows) { "java.exe" } else { "java" };
+
+    // 1. 打包 JRE
+    if let Ok(dir) = app.path().resource_dir() {
+        let p = dir.join(BUNDLED_JRE_DIR).join("bin").join(exe_name);
+        log(&format!("  Checking bundled JRE: {p:?} -> {}", p.exists()));
+        if p.exists() {
+            return Some(p);
+        }
+        // 可能多一层 resources/
+        let p2 = dir.join("resources").join(BUNDLED_JRE_DIR).join("bin").join(exe_name);
+        log(&format!("  Checking bundled JRE: {p2:?} -> {}", p2.exists()));
+        if p2.exists() {
+            return Some(p2);
+        }
+    }
+
+    // 2. exe 同目录下的 jre21
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let p = exe_dir.join("resources").join(BUNDLED_JRE_DIR).join("bin").join(exe_name);
+            log(&format!("  Checking bundled JRE: {p:?} -> {}", p.exists()));
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+
+    // 3. JAVA_HOME
     if let Ok(java_home) = std::env::var("JAVA_HOME") {
         log(&format!("  JAVA_HOME={java_home}"));
-        let p = std::path::PathBuf::from(&java_home)
-            .join("bin")
-            .join(if cfg!(windows) { "java.exe" } else { "java" });
+        let p = std::path::PathBuf::from(&java_home).join("bin").join(exe_name);
         if p.exists() {
             return Some(p);
         }
@@ -269,7 +309,7 @@ fn find_java() -> Option<std::path::PathBuf> {
         log("  JAVA_HOME not set");
     }
 
-    // PATH 查找
+    // 4. PATH
     match which::which("java") {
         Ok(p) => {
             log(&format!("  Found java in PATH: {p:?}"));

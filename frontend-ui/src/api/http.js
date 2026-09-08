@@ -1,9 +1,9 @@
 import axios from "axios";
 
-// 统一 HTTP 客户端,调 SpringBoot 127.0.0.1:8080
+// 统一 HTTP 客户端,调 SpringBoot 127.0.0.1:38080
 // 响应拦截器解包 ApiResult,成功返回 data.data,失败 reject Error(msg)
 const http = axios.create({
-  baseURL: "http://127.0.0.1:8080/api",
+  baseURL: "http://127.0.0.1:38080/api",
   timeout: 15000,
 });
 

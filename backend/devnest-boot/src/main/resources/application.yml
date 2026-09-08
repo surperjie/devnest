@@ -1,6 +1,6 @@
 server:
   address: 127.0.0.1   # 仅绑回环,杜绝局域网/外网暴露
-  port: 8080
+  port: 38080
 
 spring:
   application:

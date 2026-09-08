@@ -2,7 +2,7 @@
 # Push to dev/main or trigger manually to build Windows exe + msi
 #
 # Output artifacts:
-#   - DevNest_x.x.x_x64-setup.exe (NSIS installer)
+#   - DevNest_x.x.x_x64-setup.exe (NSIS installer, includes bundled JRE 21)
 #   - DevNest_x.x.x_x64_en-US.msi (MSI installer)
 #
 # @Author Ajiejiejie
@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@v5
 
       # ============================================================
-      # 2. Setup JDK 21 (Temurin)
+      # 2. Setup JDK 21 (Temurin) — used for Maven build AND jlink JRE
       # ============================================================
       - name: Setup JDK 21
         uses: actions/setup-java@v5
@@ -78,7 +78,32 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # ============================================================
-      # 5. Install DM JDBC driver (bundled in repo, not in Maven Central)
+      # 5. Create minimal JRE 21 using jlink (bundled in app, no system JDK needed)
+      # ============================================================
+      - name: Create minimal JRE 21 with jlink
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $jreDir = "frontend-ui/src-tauri/resources/jre21"
+          if (Test-Path $jreDir) {
+            Write-Host "JRE already exists, skipping jlink"
+          } else {
+            Write-Host "Creating minimal JRE 21 with jlink..."
+            jlink `
+              --add-modules java.base,java.desktop,java.management,java.naming,java.sql,java.instrument,java.net.http,java.scripting,java.transaction.xa,java.compiler,java.xml,java.security.jgss,java.rmi `
+              --output $jreDir `
+              --no-header-files `
+              --no-man-pages `
+              --compress=2
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "jlink failed (exit $LASTEXITCODE)"
+              exit 1
+            }
+            $size = [math]::Round((Get-ChildItem -Recurse $jreDir | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+            Write-Host "JRE 21 created: $size MB at $jreDir"
+          }
+
+      # ============================================================
+      # 6. Install DM JDBC driver (bundled in repo, not in Maven Central)
       # ============================================================
       - name: Install DM JDBC driver
         working-directory: backend
@@ -104,7 +129,7 @@ jobs:
           }
 
       # ============================================================
-      # 6. Build backend Spring Boot jar
+      # 7. Build backend Spring Boot jar
       # ============================================================
       - name: Build backend jar
         working-directory: backend
@@ -130,7 +155,7 @@ jobs:
           Write-Host "Backend jar: $size MB"
 
       # ============================================================
-      # 7. Copy jar to Tauri resources
+      # 8. Copy jar to Tauri resources
       # ============================================================
       - name: Copy jar to Tauri resources
         run: |
@@ -143,28 +168,35 @@ jobs:
           Write-Host "Jar copied to Tauri resources"
 
       # ============================================================
-      # 8. Install frontend dependencies
+      # 9. Install frontend dependencies
       # ============================================================
       - name: Install frontend dependencies
         working-directory: frontend-ui
         run: npm ci
 
       # ============================================================
-      # 9. Build Tauri app (frontend + Rust -> exe/msi)
+      # 10. Build Tauri app (frontend + Rust + JRE + jar -> exe/msi)
       # ============================================================
       - name: Build Tauri app
         working-directory: frontend-ui
-        env:
-          # Prevent Tauri from trying to start backend during build
-          TAURI_ENV: production
         run: |
           $ErrorActionPreference = 'Continue'
           Write-Host "Building Tauri app (this may take 10-20 minutes on first run)..."
+          Write-Host "Bundled resources:"
+          if (Test-Path "src-tauri/resources/jre21/bin/java.exe") {
+            $jreSize = [math]::Round((Get-ChildItem -Recurse "src-tauri/resources/jre21" | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+            Write-Host "  JRE 21: $jreSize MB"
+          } else {
+            Write-Host "  JRE 21: NOT FOUND (will fallback to system java)"
+          }
+          if (Test-Path "src-tauri/resources/devnest-boot.jar") {
+            $jarSize = [math]::Round((Get-Item "src-tauri/resources/devnest-boot.jar").Length / 1MB, 1)
+            Write-Host "  Backend jar: $jarSize MB"
+          }
           npm run tauri build 2>&1
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
             Write-Error "Tauri build failed (exit $exitCode)"
-            # Print last 50 lines of output for debugging
             Write-Host "::group::Debug: bundle directory contents"
             if (Test-Path "src-tauri/target/release/bundle") {
               Get-ChildItem -Recurse "src-tauri/target/release/bundle" | Select-Object FullName, Length
@@ -177,7 +209,7 @@ jobs:
           Write-Host "Tauri build completed successfully"
 
       # ============================================================
-      # 10. Upload artifacts
+      # 11. Upload artifacts
       # ============================================================
       - name: Find build outputs
         id: find
@@ -217,7 +249,7 @@ jobs:
           if-no-files-found: warn
 
       # ============================================================
-      # 11. Summary
+      # 12. Summary
       # ============================================================
       - name: Build summary
         if: always()

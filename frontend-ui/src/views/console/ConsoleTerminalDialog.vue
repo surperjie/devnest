@@ -117,9 +117,8 @@ const init = async () => {
     return;
   }
 
-  // WebSocket base 选择:优先用环境变量显式指定的后端,否则默认直连本地 8080
-  // (和昨天的版本保持一致的默认行为,避免走到 Vite dev server 5173 但 /ws 没代理的坑)
-  let wsBase = "ws://127.0.0.1:8080";
+  // WebSocket base 选择:优先用环境变量显式指定的后端,否则默认直连本地 38080
+  let wsBase = "ws://127.0.0.1:38080";
   try {
     const apiBase = import.meta.env.VITE_API_BASE_URL;
     if (apiBase && (apiBase.startsWith("http://") || apiBase.startsWith("https://"))) {
@@ -128,7 +127,7 @@ const init = async () => {
       wsBase = (u.protocol === "https:" ? "wss://" : "ws://") + u.host;
     }
   } catch (e) {
-    wsBase = "ws://127.0.0.1:8080";
+    wsBase = "ws://127.0.0.1:38080";
   }
   const url = `${wsBase}/ws/console/${props.row.id}?token=${encodeURIComponent(token)}`;
   term.value.writeln(`\x1b[90m[TOFU] 连接目标: ${url.replace(/token=[^&]+/, "token=***")}\x1b[0m`);
