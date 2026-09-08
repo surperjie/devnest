@@ -7,12 +7,15 @@
 ///
 /// @Author Ajiejiejie
 /// @Date 2026/9/7 10:00
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::net::TcpStream;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use tauri::Manager;
 
@@ -25,6 +28,9 @@ const BACKEND_PORT: u16 = 38080;
 const BACKEND_JAR: &str = "devnest-boot.jar";
 /// 打包 JRE 目录名
 const BUNDLED_JRE_DIR: &str = "jre21";
+#[cfg(windows)]
+/// 子进程不创建控制台窗口:避免 UI 拉起后端时弹出/闪一下的黑窗,也防止它随控制台关闭而被终止
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -79,6 +85,41 @@ fn clear_log() {
     if let Some(path) = log_file_path() {
         let _ = fs::write(&path, "");
     }
+}
+
+/// 后端自身日志统一重定向到 %TEMP%\devnest-backend.log(UTF-8,每次启动重建).
+/// 这样 UI 拉起的后端不再弹出/占用控制台(默认 GBK 控制台显示 UTF-8 中文会乱码),
+/// 日志可读性好且便于排查后端崩溃。
+fn open_backend_log() -> Option<File> {
+    let path = std::env::temp_dir().join("devnest-backend.log");
+    match OpenOptions::new().create(true).truncate(true).write(true).open(path) {
+        Ok(mut f) => {
+            let _ = writeln!(f, "=== DevNest backend log started at epoch {}", now_epoch());
+            Some(f)
+        }
+        Err(_) => None,
+    }
+}
+
+fn now_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// tauri 的 resource_dir()/canonicalize 会返回带 \\?\ 前缀的 verbatim 路径,
+/// 而 `java -jar "\\?\E:\...\app.jar"` 会加载失败(报 "Could not find or load
+/// main class JarLauncher"),因此传给 java 前必须还原成普通 Win32 路径;
+/// UNC 前缀 \\?\UNC\server\share 需还原成 \\server\share。
+fn to_win32_path(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.as_os_str().to_string_lossy();
+    let s = s
+        .strip_prefix(r"\\?\UNC\")
+        .map(|r| format!(r"\\{r}"))
+        .or_else(|| s.strip_prefix(r"\\?\").map(|r| r.to_string()))
+        .unwrap_or_else(|| s.to_string());
+    std::path::PathBuf::from(s)
 }
 
 // ========================================================================
@@ -151,18 +192,41 @@ fn start_backend(app: &tauri::AppHandle) {
     };
 
     // 3. 启动后端
+    // 关键修复:tauri 的 resource_dir() 返回带 \\?\ 前缀的 verbatim 路径,
+    // java -jar 无法打开这种 jar,会立即退出("Could not find or load main class
+    // JarLauncher"),导致 UI 一直 network error。这里必须还原为普通 Win32 路径。
+    let java_norm = to_win32_path(&java);
+    let jar_norm = to_win32_path(&jar_path);
     log(&format!(
-        "Starting: {java:?} -jar {:?} --spring.profiles.active=dev --server.port={BACKEND_PORT}",
-        jar_path
+        "Starting: {} -jar {} --spring.profiles.active=dev --server.port={BACKEND_PORT}",
+        java_norm.display(),
+        jar_norm.display()
     ));
-    let child = Command::new(&java)
-        .args([
-            "-jar",
-            jar_path.to_str().unwrap(),
-            "--spring.profiles.active=dev",
-            &format!("--server.port={BACKEND_PORT}"),
-        ])
-        .spawn();
+    let mut cmd = Command::new(&java_norm);
+    cmd.args([
+        "-jar",
+        jar_norm.to_str().unwrap(),
+        "--spring.profiles.active=dev",
+        &format!("--server.port={BACKEND_PORT}"),
+    ])
+    .stdin(Stdio::null());
+    // 不弹独立控制台窗口;后端 stdout/stderr 重定向到 UTF-8 日志文件
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Some(f) = open_backend_log() {
+        match f.try_clone() {
+            Ok(f2) => {
+                cmd.stdout(Stdio::from(f)).stderr(Stdio::from(f2));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::from(f));
+                cmd.stderr(Stdio::null());
+            }
+        }
+    }
+    let child = cmd.spawn();
 
     match child {
         Ok(c) => {

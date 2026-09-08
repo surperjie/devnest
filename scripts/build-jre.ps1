@@ -16,6 +16,13 @@
     module list below MUST always contain jdk.unsupported, and a self-check verifies
     it is actually present in the generated runtime.
 
+    IMPORTANT — jdk.crypto.ec is REQUIRED:
+    JSch SSH (devnest-tunnel) negotiates key exchange with the bastion over ECDH
+    (ecdh-sha2-nistp256/curve25519). SunEC lives in jdk.crypto.ec; without this module
+    every connection fails with:
+        java.security.NoSuchAlgorithmException: Algorithm ECDH not available
+    (observed in the packaged app while resuming a bastion tunnel).
+
 .PARAMETER JavaHome
     Path to a JDK 21 that ships jlink + jmods (default: $env:JAVA_HOME).
 
@@ -48,7 +55,8 @@ $Modules = @(
     'java.xml',
     'java.security.jgss',
     'java.rmi',
-    'jdk.unsupported'
+    'jdk.unsupported',
+    'jdk.crypto.ec'
 )
 
 if ([string]::IsNullOrWhiteSpace($JavaHome)) {
@@ -97,13 +105,17 @@ if (-not (Test-Path $JavaExe)) {
     exit 1
 }
 
-# Regression guard: the generated JRE must actually contain jdk.unsupported.
-# Note: 对数组用 -match 取"命中的行"，而非 -notmatch(取所有未命中的行)。
-$listed = & $JavaExe --list-modules 2>&1
-if (($LASTEXITCODE -ne 0) -or -not ($listed -match '^jdk\.unsupported')) {
-    Write-Error "jdk.unsupported is MISSING from the bundled JRE. Startup would fail (AOP/CGLIB). Aborting."
+# Regression guard: the generated JRE must contain the modules the app truly needs.
+# 注意:--list-modules 每行形如 "jdk.crypto.ec@21.0.7",因此用前缀匹配而非 ^...$。
+$listed = @(& $JavaExe --list-modules 2>&1)
+$missing = @('jdk.unsupported', 'jdk.crypto.ec') | Where-Object {
+    $mod = $_
+    -not ($listed | Where-Object { $_.ToString().StartsWith($mod) })
+}
+if (($LASTEXITCODE -ne 0) -or $missing.Count -gt 0) {
+    Write-Error "Bundled JRE is MISSING required module(s): $($missing -join ', '). Aborting."
     exit 1
 }
 
 $size = [math]::Round((Get-ChildItem -Recurse $JreDir | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-Write-Host "[build-jre] OK: JRE 21 ($size MB) -> $JreDir (jdk.unsupported included)"
+Write-Host "[build-jre] OK: JRE 21 ($size MB) -> $JreDir (jdk.unsupported + jdk.crypto.ec included)"

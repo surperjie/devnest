@@ -42,3 +42,7 @@ data/
 # Backup
 src-backup/
 **/target/
+
+# Rust 本地自定义 target 目录(调试/重试时替代默认 target,勿提交)
+frontend-ui/src-tauri/.target-debug/
+frontend-ui/src-tauri/.target-release/
