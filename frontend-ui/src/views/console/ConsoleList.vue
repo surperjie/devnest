@@ -93,14 +93,38 @@ const onImportFile = async (e) => {
     const text = await file.text();
     const payload = JSON.parse(text);
     const result = await consoleApi.importConsoles(payload);
+    const needPw = result.needPasswordNames || [];
     ElMessage.success(
-      `导入完成:成功 ${result.successCount},跳过 ${result.skipCount}`
+      `导入完成:成功 ${result.successCount},跳过 ${result.skipCount}` +
+        (needPw.length ? `,需重设密码 ${needPw.length} 项` : "")
     );
+    showImportNotice(needPw, result.skippedNames || []);
     loadList();
   } catch (err) {
     ElMessage.error(err.message || "导入失败:JSON 格式错误");
   } finally {
     e.target.value = "";
+  }
+};
+
+// 导入后提示:导出文件密码已脱敏 → 需重设密码;同名/依赖跳板缺失 → 已跳过
+const showImportNotice = (needPw, skipped) => {
+  const parts = [];
+  if (needPw.length) {
+    parts.push(
+      `以下 ${needPw.length} 项未携带真实密码(导出文件已脱敏),已导入但暂不能连接:` +
+        `\n\n${needPw.join("\n")}` +
+        `\n\n请点击对应配置的「编辑」重新输入密码后即可正常使用。`
+    );
+  }
+  if (skipped.length) {
+    parts.push(`以下 ${skipped.length} 项被跳过:\n\n${skipped.join("\n")}`);
+  }
+  if (parts.length) {
+    ElMessageBox.alert(parts.join("\n\n"), "导入完成,请注意", {
+      type: "warning",
+      confirmButtonText: "知道了",
+    }).catch(() => {});
   }
 };
 

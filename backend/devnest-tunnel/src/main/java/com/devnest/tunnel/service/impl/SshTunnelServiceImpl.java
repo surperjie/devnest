@@ -94,7 +94,7 @@ public class SshTunnelServiceImpl implements SshTunnelService {
     public SshBastionDto updateBastion(Long id, SshBastionRequest req) {
         SshBastion b = bastionRepo.findById(id)
                 .orElseThrow(() -> new BizException(ErrorCode.BASTION_NOT_FOUND));
-        if (tunnelManager.getInstance(id) != null) {
+        if (tunnelManager.isActive(id)) {
             throw new BizException(ErrorCode.TUNNEL_ALREADY_RUNNING, "请先停止隧道再编辑");
         }
         if (!Objects.equals(b.getName(), req.name()) && bastionRepo.existsByName(req.name())) {
@@ -157,7 +157,7 @@ public class SshTunnelServiceImpl implements SshTunnelService {
                 m.getId(), m.getBastionId(), m.getRemoteHost(), m.getRemotePort(),
                 m.getPreferredLocalPort(), null, m.getLabel(),
                 m.getCreateTime(), m.getUpdateTime())).toList();
-        return new TunnelStatusDto(id, b.getName(), TunnelState.IDLE.name(), dtos);
+        return new TunnelStatusDto(id, b.getName(), TunnelState.IDLE.name(), dtos, "");
     }
 
     @Override
@@ -187,18 +187,52 @@ public class SshTunnelServiceImpl implements SshTunnelService {
         }
         int success = 0;
         List<String> skipped = new ArrayList<>();
+        List<String> needPassword = new ArrayList<>();
         for (BastionExportItem item : payload.bastions()) {
-            if (bastionRepo.existsByName(item.name())) {
-                skipped.add(item.name());
+            if (item == null) {
                 continue;
             }
-            SshBastionRequest req = new SshBastionRequest(
-                    item.name(), item.sshHost(), item.sshPort(), item.sshUser(),
-                    item.sshPassword(), item.remark(), item.mappings());
-            createBastion(req);
-            success++;
+            String name = item.name();
+            if (name == null || name.isBlank()) {
+                skipped.add("<未命名> · 配置缺少名称");
+                continue;
+            }
+            if (bastionRepo.existsByName(name)) {
+                skipped.add(name + " · 已存在同名配置(如需覆盖请先删除原配置)");
+                continue;
+            }
+            if (item.sshHost() == null || item.sshHost().isBlank()
+                    || item.sshUser() == null || item.sshUser().isBlank()
+                    || item.sshPort() == null) {
+                skipped.add(name + " · 主机/端口/用户名信息不完整");
+                continue;
+            }
+            // 导出文件密码已脱敏:不把占位符当真实密码入库,改为导入后提示用户重新输入
+            String password = item.sshPassword();
+            boolean missingPassword = CryptoService.isPlaceholder(password);
+            if (missingPassword) {
+                needPassword.add(name);
+                password = "";
+            }
+            try {
+                SshBastionRequest req = new SshBastionRequest(
+                        name, item.sshHost(), item.sshPort(), item.sshUser(),
+                        password, item.remark(), item.mappings());
+                createBastion(req);
+                success++;
+            } catch (Exception e) {
+                skipped.add(name + " · " + safeReason(e));
+            }
         }
-        return new BastionImportResult(success, skipped.size(), skipped);
+        return new BastionImportResult(success, skipped.size(), skipped, needPassword);
+    }
+
+    private static String safeReason(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null || msg.isBlank()) {
+            msg = e.getClass().getSimpleName();
+        }
+        return msg.length() > 80 ? msg.substring(0, 80) + "…" : msg;
     }
 
     private List<SshPortMapping> saveMappings(Long bastionId, List<SshPortMappingRequest> reqs) {
@@ -218,6 +252,8 @@ public class SshTunnelServiceImpl implements SshTunnelService {
     private SshBastionDto toDto(SshBastion b, List<SshPortMapping> mappings) {
         SshTunnelInstance inst = tunnelManager.getInstance(b.getId());
         boolean running = inst != null && inst.getState().isRunning();
+        String state = inst != null ? inst.getState().name() : TunnelState.IDLE.name();
+        String statusDetail = inst != null ? inst.getStatusDetail() : "";
         List<SshPortMappingDto> mappingDtos = mappings.stream().map(m -> new SshPortMappingDto(
                 m.getId(), m.getBastionId(), m.getRemoteHost(), m.getRemotePort(),
                 m.getPreferredLocalPort(), null, m.getLabel(),
@@ -225,7 +261,8 @@ public class SshTunnelServiceImpl implements SshTunnelService {
         return new SshBastionDto(
                 b.getId(), b.getName(), b.getSshHost(), b.getSshPort(),
                 b.getSshUser(), crypto.mask(), b.getRemark(),
-                running, mappings.size(), mappingDtos, b.getCreateTime(), b.getUpdateTime());
+                running, mappings.size(), mappingDtos, b.getCreateTime(), b.getUpdateTime(),
+                state, statusDetail);
     }
 
     private TunnelStatusDto toStatusDto(SshTunnelInstance inst) {
@@ -233,6 +270,7 @@ public class SshTunnelServiceImpl implements SshTunnelService {
                 inst.getBastion().getId(),
                 inst.getBastion().getName(),
                 inst.getState().name(),
-                mappingMapper.toDtoList(inst.getMappings()));
+                mappingMapper.toDtoList(inst.getMappings()),
+                inst.getStatusDetail());
     }
 }

@@ -11,6 +11,16 @@ import java.util.List;
 public record ConsoleImportResult(
         int successCount,
         int skipCount,
-        List<String> skippedNames
+        List<String> skippedNames,
+        /** 导入成功但未携带真实密码(导出文件已脱敏),需用户重新输入的配置名称 */
+        List<String> needPasswordNames
 ) {
+    public ConsoleImportResult {
+        skippedNames = skippedNames == null ? List.of() : skippedNames;
+        needPasswordNames = needPasswordNames == null ? List.of() : needPasswordNames;
+    }
+
+    public ConsoleImportResult(int successCount, int skipCount, List<String> skippedNames) {
+        this(successCount, skipCount, skippedNames, List.of());
+    }
 }

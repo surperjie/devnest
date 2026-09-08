@@ -109,25 +109,75 @@ public class RemoteConsoleServiceImpl implements RemoteConsoleService {
         }
         int success = 0;
         List<String> skipped = new ArrayList<>();
+        List<String> needPassword = new ArrayList<>();
         for (ConsoleExportItem item : payload.consoles()) {
-            if (repository.existsByName(item.name())) {
-                skipped.add(item.name());
+            if (item == null) {
                 continue;
             }
-            RemoteConsoleRequest req = new RemoteConsoleRequest();
-            req.setName(item.name());
-            req.setRemoteHost(item.remoteHost());
-            req.setRemotePort(item.remotePort() != null ? item.remotePort() : 22);
-            req.setSshUser(item.sshUser());
-            req.setSshPassword(item.sshPassword());
-            req.setRemark(item.remark());
-            req.setQuickCommands(item.quickCommands());
-            bastionLookup.findBastionIdByName(item.bastionName())
-                    .ifPresent(req::setBastionId);
-            createConsole(req);
-            success++;
+            String name = item.name();
+            if (name == null || name.isBlank()) {
+                skipped.add("<未命名> · 配置缺少名称");
+                continue;
+            }
+            if (repository.existsByName(name)) {
+                skipped.add(name + " · 已存在同名配置(如需覆盖请先删除原配置)");
+                continue;
+            }
+            if (item.remoteHost() == null || item.remoteHost().isBlank()
+                    || item.sshUser() == null || item.sshUser().isBlank()) {
+                skipped.add(name + " · 目标主机/用户名信息不完整");
+                continue;
+            }
+            // 隧道模式控制台依赖目标机器上的同名跳板,缺失则无法使用,明确跳过并提示先导隧道
+            String bastionName = item.bastionName();
+            Long bastionId = null;
+            if (bastionName != null && !bastionName.isBlank()) {
+                bastionId = bastionLookup.findBastionIdByName(bastionName).orElse(null);
+                if (bastionId == null) {
+                    skipped.add(name + " · 依赖的跳板「" + bastionName + "」不存在,请先在 SSH 隧道页导入该跳板配置");
+                    continue;
+                }
+            }
+            // 导出文件密码已脱敏:不把占位符当真实密码入库,改为导入后提示用户重新输入
+            String password = item.sshPassword();
+            boolean missingPassword = CryptoService.isPlaceholder(password);
+            if (missingPassword) {
+                needPassword.add(name);
+                password = "";
+            }
+            try {
+                RemoteConsoleRequest req = new RemoteConsoleRequest();
+                req.setName(name);
+                req.setBastionId(bastionId);
+                req.setRemoteHost(item.remoteHost());
+                req.setRemotePort(item.remotePort() != null ? item.remotePort() : 22);
+                req.setSshUser(item.sshUser());
+                req.setRemark(item.remark());
+                req.setQuickCommands(item.quickCommands());
+                if (missingPassword) {
+                    // 占位密码不写入:直接落库空密码密文(DB 非空约束),待用户编辑时重新输入
+                    req.setSshPassword(password);
+                    RemoteConsole entity = mapper.toEntity(req);
+                    entity.setSshPasswordCipher(crypto.encrypt(password));
+                    repository.save(entity);
+                } else {
+                    req.setSshPassword(password);
+                    createConsole(req);
+                }
+                success++;
+            } catch (Exception e) {
+                skipped.add(name + " · " + safeReason(e));
+            }
         }
-        return new ConsoleImportResult(success, skipped.size(), skipped);
+        return new ConsoleImportResult(success, skipped.size(), skipped, needPassword);
+    }
+
+    private static String safeReason(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null || msg.isBlank()) {
+            msg = e.getClass().getSimpleName();
+        }
+        return msg.length() > 80 ? msg.substring(0, 80) + "…" : msg;
     }
 
     private RemoteConsoleDto toDtoWithMask(RemoteConsole entity) {

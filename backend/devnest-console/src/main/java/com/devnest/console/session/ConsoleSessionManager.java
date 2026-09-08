@@ -55,6 +55,9 @@ public class ConsoleSessionManager {
             RemoteConsole config = consoleRepo.findById(consoleId)
                     .orElseThrow(() -> new IllegalArgumentException("控制台不存在: " + consoleId));
             String password = config.decryptPassword(crypto);
+            if (CryptoService.isPlaceholder(password)) {
+                throw new IllegalArgumentException("控制台「" + config.getName() + "」未设置真实密码(导入文件已脱敏或密码为空),请先点击编辑重新输入密码");
+            }
 
             Integer allocatedPort = null;
             String connectHost;

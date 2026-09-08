@@ -12,6 +12,8 @@ public record TunnelStatusDto(
         Long bastionId,
         String name,
         String state,
-        List<SshPortMappingDto> mappings
+        List<SshPortMappingDto> mappings,
+        /** 状态详情:连接中/第几次重试/失败原因等 */
+        String statusDetail
 ) {
 }

@@ -10,14 +10,61 @@ const dialogVisible = ref(false);
 const editingRow = ref(null);
 const importInput = ref(null);
 
+// 运行状态展示文案与标签色
+const STATE_LABEL = {
+  IDLE: "未启动",
+  CONNECTING: "连接中",
+  RECONNECTING: "重连中",
+  RUNNING: "运行中",
+  ERROR: "连接失败",
+  CLOSED: "已停止",
+};
+const STATE_TAG = {
+  IDLE: "info",
+  CONNECTING: "warning",
+  RECONNECTING: "warning",
+  RUNNING: "success",
+  ERROR: "danger",
+  CLOSED: "info",
+};
+const stateText = (s) => STATE_LABEL[s] || "未启动";
+const stateTagType = (s) => STATE_TAG[s] || "info";
+const isBusy = (s) => s === "CONNECTING" || s === "RECONNECTING";
+
+// 记录上次观察到的状态,状态变化时给出即时提示,让用户感知连接/重试/失败过程
+const stateSeen = {};
+const notifyStateTransition = (rows) => {
+  const seenIds = new Set();
+  for (const row of rows) {
+    seenIds.add(row.id);
+    const cur = row.state || "IDLE";
+    const prev = stateSeen[row.id];
+    if (prev && prev !== cur) {
+      if (cur === "RUNNING" && prev === "CONNECTING") {
+        ElMessage.success(`隧道「${row.name}」连接成功`);
+      } else if (cur === "RUNNING" && prev === "RECONNECTING") {
+        ElMessage.success(`隧道「${row.name}」已自动重连`);
+      } else if (cur === "ERROR" && ["CONNECTING", "RECONNECTING", "RUNNING"].includes(prev)) {
+        ElMessage.error(`「${row.name}」连接失败:${row.statusDetail || "网络异常"}`);
+      }
+    }
+    stateSeen[row.id] = cur;
+  }
+  Object.keys(stateSeen).forEach((id) => {
+    if (!seenIds.has(Number(id))) delete stateSeen[id];
+  });
+};
+
 const loadList = async () => {
-  loading.value = true;
+  if (!list.value.length) loading.value = true;
   try {
     list.value = await tunnelApi.listBastions();
+    notifyStateTransition(list.value);
   } catch (e) {
     ElMessage.error(e.message);
   } finally {
     loading.value = false;
+    schedulePoll();
   }
 };
 
@@ -37,8 +84,8 @@ const onDialogSuccess = () => {
 
 const onStart = async (row) => {
   try {
+    // 启动已改为异步:接口立即返回,连接与重试进展由轮询实时反馈
     await tunnelApi.startTunnel(row.id);
-    ElMessage.success("隧道已启动");
     loadList();
   } catch (e) {
     ElMessage.error(e.message);
@@ -95,7 +142,12 @@ const onImportFile = async (e) => {
     const text = await file.text();
     const payload = JSON.parse(text);
     const result = await tunnelApi.importBastions(payload);
-    ElMessage.success(`导入完成:成功 ${result.successCount},跳过 ${result.skipCount}`);
+    const needPw = result.needPasswordNames || [];
+    ElMessage.success(
+      `导入完成:成功 ${result.successCount},跳过 ${result.skipCount}` +
+        (needPw.length ? `,需重设密码 ${needPw.length} 项` : "")
+    );
+    showImportNotice(needPw, result.skippedNames || []);
     loadList();
   } catch (err) {
     ElMessage.error(err.message || "导入失败:JSON 格式错误");
@@ -104,13 +156,40 @@ const onImportFile = async (e) => {
   }
 };
 
-// 5 秒轮询刷新(运行中状态会变)
-let timer;
+// 导入后提示:导出文件密码已脱敏 → 需重设密码;同名/信息缺失 → 已跳过
+const showImportNotice = (needPw, skipped) => {
+  const parts = [];
+  if (needPw.length) {
+    parts.push(
+      `以下 ${needPw.length} 项未携带真实密码(导出文件已脱敏),已导入但暂不能连接:` +
+        `\n\n${needPw.join("\n")}` +
+        `\n\n请点击对应配置的「编辑」重新输入密码后即可正常使用。`
+    );
+  }
+  if (skipped.length) {
+    parts.push(`以下 ${skipped.length} 项被跳过:\n\n${skipped.join("\n")}`);
+  }
+  if (parts.length) {
+    ElMessageBox.alert(parts.join("\n\n"), "导入完成,请注意", {
+      type: "warning",
+      confirmButtonText: "知道了",
+    }).catch(() => {});
+  }
+};
+
+// 轮询:有跳板处于连接/重连中时加速到 1.5s 让重试进展及时可见,空闲时 5s
+let timer = null;
+const schedulePoll = () => {
+  if (timer) clearInterval(timer);
+  const busy = list.value.some((r) => isBusy(r.state || "IDLE"));
+  timer = setInterval(loadList, busy ? 1500 : 5000);
+};
 onMounted(() => {
   loadList();
-  timer = setInterval(loadList, 5000);
 });
-onUnmounted(() => clearInterval(timer));
+onUnmounted(() => {
+  if (timer) clearInterval(timer);
+});
 </script>
 
 <template>
@@ -164,18 +243,25 @@ onUnmounted(() => clearInterval(timer));
         </template>
       </el-table-column>
       <el-table-column prop="mappingCount" label="映射数" width="80" align="center" />
-      <el-table-column label="状态" width="100" align="center">
+      <el-table-column label="状态" width="170" align="center">
         <template #default="{ row }">
-          <el-tag :type="row.running ? 'success' : 'info'" size="small">
-            {{ row.running ? "运行中" : "未启动" }}
+          <el-tag :type="stateTagType(row.state)" size="small">
+            {{ stateText(row.state) }}
           </el-tag>
+          <div
+            v-if="row.statusDetail && ['CONNECTING', 'RECONNECTING', 'ERROR'].includes(row.state)"
+            class="state-detail"
+            :title="row.statusDetail"
+          >
+            {{ row.statusDetail }}
+          </div>
         </template>
       </el-table-column>
       <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <el-button
-            v-if="!row.running"
+            v-if="row.state !== 'RUNNING' && !isBusy(row.state)"
             type="success"
             size="small"
             @click="onStart(row)"
@@ -185,7 +271,7 @@ onUnmounted(() => clearInterval(timer));
             type="warning"
             size="small"
             @click="onStop(row)"
-          >停止</el-button>
+          >{{ isBusy(row.state) ? "取消连接" : "停止" }}</el-button>
           <el-button size="small" @click="onEdit(row)">编辑</el-button>
           <el-button type="danger" size="small" @click="onDelete(row)">删除</el-button>
         </template>
@@ -218,5 +304,15 @@ onUnmounted(() => clearInterval(timer));
 }
 .expand-content {
   padding: 12px 12px 12px 48px;
+}
+.state-detail {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #909399;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

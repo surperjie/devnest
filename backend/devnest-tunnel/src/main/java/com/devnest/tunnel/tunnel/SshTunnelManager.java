@@ -60,11 +60,18 @@ public class SshTunnelManager {
      * 启动指定跳板的隧道.
      */
     public SshTunnelInstance startTunnel(Long bastionId) {
-        if (instances.containsKey(bastionId)) {
+        // 终态(ERROR/CLOSED)的旧实例允许被重新拉起,其余状态视为已在运行
+        SshTunnelInstance existing = instances.get(bastionId);
+        if (existing != null && !existing.getState().isTerminal()) {
             throw new BizException(ErrorCode.TUNNEL_ALREADY_RUNNING);
         }
         SshBastion bastion = bastionRepo.findById(bastionId)
                 .orElseThrow(() -> new BizException(ErrorCode.BASTION_NOT_FOUND));
+        String bastionPassword = bastion.decryptPassword(crypto);
+        if (CryptoService.isPlaceholder(bastionPassword)) {
+            throw new BizException(ErrorCode.TUNNEL_START_FAILED,
+                    "跳板「" + bastion.getName() + "」未设置真实密码(导入文件已脱敏或密码为空),请先点击编辑重新输入密码");
+        }
         List<SshPortMapping> mappings = mappingRepo.findByBastionId(bastionId);
         if (mappings.isEmpty()) {
             throw new BizException(ErrorCode.PORT_MAPPING_NOT_FOUND, "跳板下无端口映射");
@@ -72,9 +79,19 @@ public class SshTunnelManager {
         SshTunnelInstance inst = new SshTunnelInstance(
                 bastion, mappings, props, portAllocator, crypto, virtualExecutor);
         inst.setLifecycleListener(this::onInstanceStateChanged);
-        inst.start();
+        // 先注册再异步启动:连接/重试期间,前端轮询即可实时感知 CONNECTING 与重试进展
         instances.put(bastionId, inst);
+        inst.start();
         return inst;
+    }
+
+    /**
+     * 判断该跳板是否处于活跃连接(RUNNING/CONNECTING/RECONNECTING).
+     * 用于编辑/删除等业务的前置校验:终态(ERROR/CLOSED)不应再拦截编辑.
+     */
+    public boolean isActive(Long bastionId) {
+        SshTunnelInstance inst = instances.get(bastionId);
+        return inst != null && !inst.getState().isTerminal();
     }
 
     /**

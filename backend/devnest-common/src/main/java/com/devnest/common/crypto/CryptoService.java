@@ -74,6 +74,15 @@ public class CryptoService {
     }
 
     /**
+     * 判断明文是否为"未携带真实密码":null/空白/脱敏占位符.
+     * 用于导入导出:导出文件中的密码已脱敏,导入时此类值不得当作真实密码入库.
+     */
+    public static boolean isPlaceholder(String plain) {
+        return plain == null || plain.isBlank()
+                || "***".equals(plain) || MASK.equals(plain);
+    }
+
+    /**
      * 脱敏占位,前端编辑时密码字段显示此值表示未修改.
      */
     public String mask() {

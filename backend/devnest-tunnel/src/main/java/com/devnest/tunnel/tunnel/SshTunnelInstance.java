@@ -52,6 +52,8 @@ public class SshTunnelInstance {
     private final JSch jsch = new JSch();
     private volatile Session session;
     private volatile TunnelState state = TunnelState.IDLE;
+    /** 最近一次状态详情(正在第几次重试/失败原因等),随状态查询返回给前端,让用户感知重试过程 */
+    private volatile String statusDetail = "";
     private ScheduledExecutorService heartbeatExecutor;
     /** 统一由 VirtualThreadExecutorConfig 注入的全局虚拟线程执行器,不再自己 new */
     private final ExecutorService virtualExecutor;
@@ -79,7 +81,12 @@ public class SshTunnelInstance {
         this.lifecycleListener = listener;
     }
 
+    public String getStatusDetail() {
+        return statusDetail;
+    }
+
     private void fireStateChanged(TunnelState newState, String detail) {
+        statusDetail = detail;
         try {
             LifecycleListener l = lifecycleListener;
             if (l != null) l.onStateChanged(bastion.getId(), newState, detail);
@@ -89,27 +96,61 @@ public class SshTunnelInstance {
     }
 
     /**
-     * 启动隧道:分配端口 → 建立 SSH 会话 → 绑定端口转发 → 启动心跳.
+     * 启动隧道(异步,立即返回):分配端口 → 建立 SSH 会话 → 绑定端口转发 → 启动心跳.
+     * 连接及每次重试进展通过状态详情(fireStateChanged)对外暴露,前端轮询即可感知;
+     * 连接失败不抛给调用方(HTTP 已返回),最终以 ERROR 状态 + 详情文字体现.
      */
     public synchronized void start() {
-        if (state == TunnelState.RUNNING || state == TunnelState.CONNECTING) {
+        if (state == TunnelState.RUNNING || state == TunnelState.CONNECTING
+                || state == TunnelState.RECONNECTING) {
             throw new BizException(ErrorCode.TUNNEL_ALREADY_RUNNING);
         }
         state = TunnelState.CONNECTING;
-        fireStateChanged(state, "建立 SSH 会话中");
+        reconnectCount = 0;
+        fireStateChanged(state, "正在建立 SSH 会话");
+        if (reconnectTask != null) {
+            reconnectTask.cancel(true);
+            reconnectTask = null;
+        }
+        reconnectTask = virtualExecutor.submit(this::connectInternal);
+    }
+
+    private void connectInternal() {
         try {
             allocateLocalPorts();
             establishSession();
-            state = TunnelState.RUNNING;
-            reconnectCount = 0;
+            synchronized (this) {
+                if (state != TunnelState.CONNECTING) {
+                    // 连接过程中用户点了停止(CLOSED),不覆盖状态也不重复释放端口
+                    if (state != TunnelState.CLOSED) {
+                        rollbackPorts();
+                    }
+                    return;
+                }
+                state = TunnelState.RUNNING;
+                reconnectCount = 0;
+                reconnectTask = null;
+            }
             startHeartbeat();
             log.info("隧道[{}]启动成功,共 {} 条映射", bastion.getName(), mappings.size());
-            fireStateChanged(state, "启动成功");
+            fireStateChanged(TunnelState.RUNNING, "启动成功,正在运行");
         } catch (Exception e) {
-            state = TunnelState.ERROR;
+            synchronized (this) {
+                if (state == TunnelState.CLOSED) {
+                    // 用户中途停止,静默返回
+                    return;
+                }
+                state = TunnelState.ERROR;
+                reconnectTask = null;
+            }
+            disconnectSessionQuietly();
             rollbackPorts();
-            fireStateChanged(state, "启动失败:" + e.getMessage());
-            throw new BizException(ErrorCode.TUNNEL_START_FAILED, e.getMessage());
+            String reason = e.getMessage();
+            if (reason == null || reason.isBlank()) {
+                reason = e.getClass().getSimpleName();
+            }
+            log.error("隧道[{}]启动失败:{}", bastion.getName(), reason);
+            fireStateChanged(TunnelState.ERROR, "连接失败:" + reason);
         }
     }
 
@@ -126,9 +167,7 @@ public class SshTunnelInstance {
             reconnectTask.cancel(true);
             reconnectTask = null;
         }
-        if (session != null && session.isConnected()) {
-            session.disconnect();
-        }
+        disconnectSessionQuietly();
         rollbackPorts();
         state = TunnelState.CLOSED;
         log.info("隧道[{}]已关闭(persistClosed={})", bastion.getName(), persistClosed);
@@ -144,20 +183,36 @@ public class SshTunnelInstance {
         while (state == TunnelState.RECONNECTING && reconnectCount < props.getMaxRetries()) {
             try {
                 establishSession();
-                state = TunnelState.RUNNING;
-                reconnectCount = 0;
+                synchronized (this) {
+                    if (state != TunnelState.RECONNECTING) {
+                        // 用户已停止或状态已变化
+                        return;
+                    }
+                    state = TunnelState.RUNNING;
+                    reconnectCount = 0;
+                }
                 log.info("隧道[{}]重连成功", bastion.getName());
-                fireStateChanged(state, "自动重连成功");
+                fireStateChanged(TunnelState.RUNNING, "自动重连成功");
                 return;
             } catch (Exception e) {
-                reconnectCount++;
-                log.warn("隧道[{}]第{}次重连失败:{}", bastion.getName(), reconnectCount, e.getMessage());
-                if (reconnectCount >= props.getMaxRetries()) {
-                    state = TunnelState.ERROR;
-                    log.error("隧道[{}]重连失败,已达最大次数,状态置 ERROR", bastion.getName());
-                    fireStateChanged(state, "重连达最大次数");
-                    return;
+                synchronized (this) {
+                    if (state == TunnelState.CLOSED) {
+                        return;
+                    }
+                    reconnectCount++;
+                    if (reconnectCount >= props.getMaxRetries()) {
+                        stopHeartbeat();
+                        disconnectSessionQuietly();
+                        rollbackPorts();
+                        state = TunnelState.ERROR;
+                        fireStateChanged(TunnelState.ERROR,
+                                "重连失败,已达最大次数,请检查网络后重新启动");
+                        return;
+                    }
+                    fireStateChanged(TunnelState.RECONNECTING,
+                            "第 " + reconnectCount + "/" + props.getMaxRetries() + " 轮重连失败,等待重试");
                 }
+                log.warn("隧道[{}]第{}轮重连失败:{}", bastion.getName(), reconnectCount, e.getMessage());
                 try {
                     Thread.sleep(props.getRetryIntervalMs());
                 } catch (InterruptedException ie) {
@@ -186,13 +241,26 @@ public class SshTunnelInstance {
         }
     }
 
+    private void disconnectSessionQuietly() {
+        Session s = session;
+        if (s != null && s.isConnected()) {
+            try {
+                s.disconnect();
+            } catch (Exception ignored) {
+                // 忽略断开异常,不影响后续状态流转
+            }
+        }
+    }
+
     private void establishSession() throws Exception {
         if (session != null && session.isConnected()) {
             session.disconnect();
         }
         String password = bastion.decryptPassword(crypto);
         int retries = 0;
-        while (retries < props.getMaxRetries()) {
+        while (retries < props.getMaxRetries()
+                && !Thread.currentThread().isInterrupted()
+                && state != TunnelState.CLOSED) {
             try {
                 session = jsch.getSession(bastion.getSshUser(), bastion.getSshHost(), bastion.getSshPort());
                 session.setPassword(password);
@@ -207,14 +275,29 @@ public class SshTunnelInstance {
                 }
                 return;
             } catch (JSchException e) {
+                if (state == TunnelState.CLOSED || Thread.currentThread().isInterrupted()) {
+                    // 用户主动停止,不再继续重试
+                    return;
+                }
                 retries++;
                 if (retries >= props.getMaxRetries()) {
-                    throw new JSchException("SSH 会话建立失败(重试 " + retries + " 次): " + e.getMessage(), e);
+                    throw new JSchException("SSH 连接失败,已重试 " + retries + " 次: " + conciseReason(e), e);
                 }
-                log.warn("  第{}次连接失败:{}, {}ms 后重试", retries, e.getMessage(), props.getRetryIntervalMs());
+                String detail = "第 " + retries + "/" + props.getMaxRetries()
+                        + " 次连接失败,等待重试:" + conciseReason(e);
+                log.warn("隧道[{}]{}", bastion.getName(), detail);
+                fireStateChanged(state, detail);
                 Thread.sleep(props.getRetryIntervalMs());
             }
         }
+    }
+
+    private static String conciseReason(Exception e) {
+        String msg = e.getMessage();
+        if (msg == null || msg.isBlank()) {
+            msg = e.getClass().getSimpleName();
+        }
+        return msg.length() > 60 ? msg.substring(0, 60) + "…" : msg;
     }
 
     private void startHeartbeat() {
@@ -245,7 +328,7 @@ public class SshTunnelInstance {
                 log.warn("隧道[{}]心跳失败,触发异步重连", bastion.getName());
                 state = TunnelState.RECONNECTING;
                 reconnectCount = 0;
-                fireStateChanged(state, "心跳失败,正在重连");
+                fireStateChanged(state, "网络中断,正在自动重连");
                 reconnectTask = virtualExecutor.submit(this::reconnect);
             }
         } catch (Exception e) {

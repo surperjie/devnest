@@ -22,6 +22,10 @@ public record SshBastionDto(
         Integer mappingCount,
         List<SshPortMappingDto> mappings,
         LocalDateTime createTime,
-        LocalDateTime updateTime
+        LocalDateTime updateTime,
+        /** 运行状态 IDLE/CONNECTING/RECONNECTING/RUNNING/ERROR/CLOSED,未启动为 IDLE */
+        String state,
+        /** 状态详情:连接中/第几次重试/失败原因等,供前端实时感知 */
+        String statusDetail
 ) {
 }
