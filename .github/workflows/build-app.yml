@@ -82,8 +82,15 @@ jobs:
       # ============================================================
       - name: Create minimal JRE 21 with jlink
         run: |
-          $ErrorActionPreference = 'Continue'
-          $jreDir = "frontend-ui/src-tauri/resources/jre21"
+          $ErrorActionPreference = 'Stop'
+          $resParent = "frontend-ui/src-tauri/resources"
+          $jreDir = "$resParent/jre21"
+          
+          # 关键：先创建resources父目录！
+          if (-not (Test-Path $resParent)) {
+            New-Item -Path $resParent -ItemType Directory -Force | Out-Null
+          }
+          
           if (Test-Path $jreDir) {
             Write-Host "JRE already exists, skipping jlink"
           } else {
@@ -94,6 +101,7 @@ jobs:
               --no-header-files `
               --no-man-pages `
               --compress=2
+          
             if ($LASTEXITCODE -ne 0) {
               Write-Error "jlink failed (exit $LASTEXITCODE)"
               exit 1
@@ -101,6 +109,15 @@ jobs:
             $size = [math]::Round((Get-ChildItem -Recurse $jreDir | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
             Write-Host "JRE 21 created: $size MB at $jreDir"
           }
+          
+          # 强制校验 java.exe 必须存在，不通过直接终止CI，防止tauri build报glob
+          $javaExe = Join-Path $jreDir "bin\java.exe"
+          if (-not (Test-Path $javaExe)) {
+            Write-Error "jlink output missing bin/java.exe : $javaExe"
+            exit 1
+          }
+          Write-Host "✅ Validate OK: $javaExe"
+      
 
       # ============================================================
       # 6. Install DM JDBC driver (bundled in repo, not in Maven Central)
