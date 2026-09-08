@@ -1,0 +1,3 @@
+# 此目录用于存放打包时需要嵌入 exe 的后端 jar
+# 由 build-app.ps1 自动生成 devnest-boot.jar,无需手动放入
+# jar 文件已被 .gitignore 忽略,不会提交到仓库

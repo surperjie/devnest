@@ -1,0 +1,189 @@
+# DevNest Desktop App Build Pipeline
+# Push to dev/main or trigger manually to build Windows exe + msi
+#
+# Output artifacts:
+#   - DevNest_x.x.x_x64-setup.exe (NSIS installer)
+#   - DevNest_x.x.x_x64_en-US.msi (MSI installer)
+#
+# @Author Ajiejiejie
+name: Build Desktop App
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'backend/**'
+      - 'frontend-ui/**'
+      - '.github/workflows/build-app.yml'
+  workflow_dispatch:
+    inputs:
+      skip_backend:
+        description: 'Skip backend build (use cached jar)'
+        type: boolean
+        default: false
+
+env:
+  JAVA_VERSION: '21'
+  NODE_VERSION: '20'
+
+jobs:
+  build:
+    name: Build Windows Desktop App
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. Setup JDK 21 (Temurin)
+      # ============================================================
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      # ============================================================
+      # 3. Setup Node.js
+      # ============================================================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend-ui/package-lock.json
+
+      # ============================================================
+      # 4. Setup Rust (MSVC toolchain)
+      # ============================================================
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            frontend-ui/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # ============================================================
+      # 5. Install DM JDBC driver (bundled in repo, not in Maven Central)
+      # ============================================================
+      - name: Install DM JDBC driver
+        working-directory: backend
+        run: |
+          $jar = "lib/DmJdbcDriver18-8.1.3.140.jar"
+          if (Test-Path $jar) {
+            mvn install:install-file `
+              -Dfile=$jar `
+              -DgroupId=com.dameng `
+              -DartifactId=DmJdbcDriver18 `
+              -Dversion=8.1.3.140 `
+              -Dpackaging=jar `
+              -q
+            Write-Host "DM JDBC driver installed"
+          } else {
+            Write-Host "DM JDBC driver not found, skipping"
+          }
+
+      # ============================================================
+      # 6. Build backend Spring Boot jar
+      # ============================================================
+      - name: Build backend jar
+        if: ${{ github.event.inputs.skip_backend != 'true' }}
+        working-directory: backend
+        run: mvn package -DskipTests -B -q
+
+      - name: Verify jar exists
+        working-directory: backend
+        run: |
+          $jar = "devnest-boot/target/devnest-boot-1.0.0.jar"
+          if (-not (Test-Path $jar)) {
+            Write-Error "Backend jar not found: $jar"
+            exit 1
+          }
+          $size = [math]::Round((Get-Item $jar).Length / 1MB, 1)
+          Write-Host "Backend jar: $size MB"
+
+      # ============================================================
+      # 7. Copy jar to Tauri resources
+      # ============================================================
+      - name: Copy jar to Tauri resources
+        run: |
+          $resourcesDir = "frontend-ui/src-tauri/resources"
+          if (-not (Test-Path $resourcesDir)) {
+            New-Item -ItemType Directory -Path $resourcesDir -Force
+          }
+          Copy-Item "backend/devnest-boot/target/devnest-boot-1.0.0.jar" `
+                    "$resourcesDir/devnest-boot.jar" -Force
+          Write-Host "Jar copied to Tauri resources"
+
+      # ============================================================
+      # 8. Install frontend dependencies
+      # ============================================================
+      - name: Install frontend dependencies
+        working-directory: frontend-ui
+        run: npm ci
+
+      # ============================================================
+      # 9. Build Tauri app (frontend + Rust -> exe/msi)
+      # ============================================================
+      - name: Build Tauri app
+        working-directory: frontend-ui
+        run: npm run tauri build
+
+      # ============================================================
+      # 10. Upload artifacts
+      # ============================================================
+      - name: Find build outputs
+        id: find
+        run: |
+          $bundleDir = "frontend-ui/src-tauri/target/release/bundle"
+          $msi = Get-ChildItem "$bundleDir/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $nsis = Get-ChildItem "$bundleDir/nsis/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($msi) { Write-Host "MSI: $($msi.Name) ($([math]::Round($msi.Length/1MB,1)) MB)" }
+          if ($nsis) { Write-Host "EXE: $($nsis.Name) ($([math]::Round($nsis.Length/1MB,1)) MB)" }
+
+          if ($msi) { echo "msi_path=$($msi.FullName)" >> $env:GITHUB_OUTPUT }
+          if ($nsis) { echo "exe_path=$($nsis.FullName)" >> $env:GITHUB_OUTPUT }
+
+      - name: Upload NSIS installer
+        if: steps.find.outputs.exe_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: DevNest-Windows-Setup
+          path: ${{ steps.find.outputs.exe_path }}
+          if-no-files-found: warn
+
+      - name: Upload MSI installer
+        if: steps.find.outputs.msi_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: DevNest-Windows-MSI
+          path: ${{ steps.find.outputs.msi_path }}
+          if-no-files-found: warn
+
+      # ============================================================
+      # 11. Summary
+      # ============================================================
+      - name: Build summary
+        if: always()
+        run: |
+          Write-Host "========================================"
+          Write-Host " Build: ${{ job.status }}"
+          Write-Host " Branch: ${{ github.ref_name }}"
+          Write-Host " Commit: ${{ github.sha }}"
+          Write-Host "========================================"

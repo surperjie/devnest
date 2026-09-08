@@ -44,13 +44,7 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- 达梦 DM8 JDBC(可选,需要本地安装驱动包) -->
-        <dependency>
-            <groupId>com.dameng</groupId>
-            <artifactId>DmJdbcDriver18</artifactId>
-            <optional>true</optional>
-            <scope>runtime</scope>
-        </dependency>
+        <!-- 达梦 DM8 JDBC:通过 profile 条件化加载,CI 构建时用 -DskipDm 跳过 -->
 
         <!-- 数据库迁移 -->
         <dependency>
@@ -98,4 +92,28 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- ============================================================
+         Profile: dm-driver
+         达梦 DM8 JDBC 驱动不在 Maven 中央仓库,需用户本地 install
+         CI 构建时用 -DskipDm 激活默认 profile 跳过
+         ============================================================ -->
+    <profiles>
+        <profile>
+            <id>dm-driver</id>
+            <activation>
+                <property>
+                    <name>!skipDm</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>com.dameng</groupId>
+                    <artifactId>DmJdbcDriver18</artifactId>
+                    <optional>true</optional>
+                    <scope>runtime</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 </project>

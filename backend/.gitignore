@@ -16,6 +16,8 @@ logs/
 
 # Package
 *.jar
+# Exception: DM JDBC driver bundled in repo (not in Maven Central)
+!lib/*.jar
 *.war
 
 # H2 数据文件(本地持久化,不入库)

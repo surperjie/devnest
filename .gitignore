@@ -24,6 +24,8 @@ replay_pid*
 
 # Package
 *.jar
+# Exception: DM JDBC driver bundled in repo (not in Maven Central)
+!backend/lib/*.jar
 *.war
 *.nar
 *.ear
