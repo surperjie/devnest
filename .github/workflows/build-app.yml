@@ -89,13 +89,18 @@ jobs:
           $jar = "lib/DmJdbcDriver18-8.1.3.140.jar"
           if (Test-Path $jar) {
             mvn install:install-file `
-              -Dfile=$jar `
-              -DgroupId=com.dameng `
-              -DartifactId=DmJdbcDriver18 `
-              -Dversion=8.1.3.140 `
-              -Dpackaging=jar `
+              "-Dfile=$jar" `
+              '-DgroupId=com.dameng' `
+              '-DartifactId=DmJdbcDriver18' `
+              '-Dversion=8.1.3.140' `
+              '-Dpackaging=jar' `
               -B -q
-            Write-Host "DM JDBC driver installed"
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "DM JDBC driver installed"
+            } else {
+              Write-Host "DM JDBC driver install failed, exit code: $LASTEXITCODE"
+              exit 1
+            }
           } else {
             Write-Host "DM JDBC driver not found, skipping"
           }
