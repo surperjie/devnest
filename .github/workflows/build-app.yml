@@ -79,45 +79,16 @@ jobs:
 
       # ============================================================
       # 5. Create minimal JRE 21 using jlink (bundled in app, no system JDK needed)
+      #    Module list lives in scripts/build-jre.ps1 (single source of truth).
+      #    MUST include jdk.unsupported: Spring AOP(CGLIB/Objenesis) 依赖
+      #    sun.misc.Unsafe,缺失时 @Transactional 服务启动即抛
+      #    NoClassDefFoundError -> "Unexpected AOP exception"(见 startup-repro)。
       # ============================================================
       - name: Create minimal JRE 21 with jlink
         run: |
           $ErrorActionPreference = 'Stop'
-          $resParent = "frontend-ui/src-tauri/resources"
-          $jreDir = "$resParent/jre21"
-          
-          # 关键：先创建resources父目录！
-          if (-not (Test-Path $resParent)) {
-            New-Item -Path $resParent -ItemType Directory -Force | Out-Null
-          }
-          
-          if (Test-Path $jreDir) {
-            Write-Host "JRE already exists, skipping jlink"
-          } else {
-            Write-Host "Creating minimal JRE 21 with jlink..."
-            jlink `
-              --add-modules java.base,java.desktop,java.management,java.naming,java.sql,java.instrument,java.net.http,java.scripting,java.transaction.xa,java.compiler,java.xml,java.security.jgss,java.rmi `
-              --output $jreDir `
-              --no-header-files `
-              --no-man-pages `
-              --compress=2
-          
-            if ($LASTEXITCODE -ne 0) {
-              Write-Error "jlink failed (exit $LASTEXITCODE)"
-              exit 1
-            }
-            $size = [math]::Round((Get-ChildItem -Recurse $jreDir | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
-            Write-Host "JRE 21 created: $size MB at $jreDir"
-          }
-          
-          # 强制校验 java.exe 必须存在，不通过直接终止CI，防止tauri build报glob
-          $javaExe = Join-Path $jreDir "bin\java.exe"
-          if (-not (Test-Path $javaExe)) {
-            Write-Error "jlink output missing bin/java.exe : $javaExe"
-            exit 1
-          }
-          Write-Host "✅ Validate OK: $javaExe"
-      
+          & "scripts/build-jre.ps1" -JavaHome $env:JAVA_HOME
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # ============================================================
       # 6. Install DM JDBC driver (bundled in repo, not in Maven Central)
@@ -185,14 +156,63 @@ jobs:
           Write-Host "Jar copied to Tauri resources"
 
       # ============================================================
-      # 9. Install frontend dependencies
+      # 9. Smoke test: boot backend with the bundled JRE before packaging.
+      #    Guards against future jlink module omissions (e.g. jdk.unsupported
+      #    -> NoClassDefFoundError: sun/misc/Unsafe -> "Unexpected AOP exception").
+      # ============================================================
+      - name: Smoke test backend with bundled JRE
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $java = "frontend-ui/src-tauri/resources/jre21/bin/java.exe"
+          $jar  = "frontend-ui/src-tauri/resources/devnest-boot.jar"
+          if (-not (Test-Path $java)) { Write-Error "Bundled JRE missing: $java"; exit 1 }
+          if (-not (Test-Path $jar))  { Write-Error "Backend jar missing: $jar"; exit 1 }
+
+          $log = Join-Path $env:RUNNER_TEMP "devnest-smoke.log"
+          $err = "$log.err"
+          $p = Start-Process -FilePath $java `
+                -ArgumentList '-jar', $jar, '--spring.profiles.active=dev', '--server.port=38099', '--spring.main.banner-mode=off' `
+                -RedirectStandardOutput $log -RedirectStandardError $err `
+                -PassThru -WindowStyle Hidden
+
+          function Dump-Logs {
+            Write-Host "--- stdout ---"
+            Get-Content $log -ErrorAction SilentlyContinue
+            Write-Host "--- stderr ---"
+            Get-Content $err -ErrorAction SilentlyContinue
+          }
+
+          $deadline = (Get-Date).AddSeconds(90)
+          $started = $false
+          while ((Get-Date) -lt $deadline -and -not $started) {
+            Start-Sleep -Seconds 3
+            if ($p.HasExited) {
+              Dump-Logs
+              Write-Error "Backend exited before startup, code=$($p.ExitCode)"
+            }
+            if ((Get-Content $log -Raw -ErrorAction SilentlyContinue) -match 'Started DevNestApplication') {
+              $started = $true
+            }
+          }
+
+          if ($started) {
+            Write-Host "Smoke test PASSED: bundled JRE can boot the backend"
+          } else {
+            Dump-Logs
+            if (-not $p.HasExited) { $p.Kill() }
+            Write-Error "Backend did not start within 90s using bundled JRE"
+          }
+          if (-not $p.HasExited) { $p.Kill() }
+
+      # ============================================================
+      # 10. Install frontend dependencies
       # ============================================================
       - name: Install frontend dependencies
         working-directory: frontend-ui
         run: npm ci
 
       # ============================================================
-      # 10. Build Tauri app (frontend + Rust + JRE + jar -> exe/msi)
+      # 11. Build Tauri app (frontend + Rust + JRE + jar -> exe/msi)
       # ============================================================
       - name: Build Tauri app
         working-directory: frontend-ui
@@ -226,7 +246,7 @@ jobs:
           Write-Host "Tauri build completed successfully"
 
       # ============================================================
-      # 11. Upload artifacts
+      # 12. Upload artifacts
       # ============================================================
       - name: Find build outputs
         id: find
@@ -266,7 +286,7 @@ jobs:
           if-no-files-found: warn
 
       # ============================================================
-      # 12. Summary
+      # 13. Summary
       # ============================================================
       - name: Build summary
         if: always()
