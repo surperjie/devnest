@@ -16,21 +16,20 @@ on:
       - 'frontend-ui/**'
       - '.github/workflows/build-app.yml'
   workflow_dispatch:
-    inputs:
-      skip_backend:
-        description: 'Skip backend build (use cached jar)'
-        type: boolean
-        default: false
 
 env:
   JAVA_VERSION: '21'
   NODE_VERSION: '24'
 
+defaults:
+  run:
+    shell: pwsh
+
 jobs:
   build:
     name: Build Windows Desktop App
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       # ============================================================
@@ -83,11 +82,11 @@ jobs:
       # ============================================================
       - name: Install DM JDBC driver
         working-directory: backend
-        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           $jar = "lib/DmJdbcDriver18-8.1.3.140.jar"
           if (Test-Path $jar) {
+            Write-Host "Installing DM JDBC driver from $jar"
             mvn install:install-file `
               "-Dfile=$jar" `
               '-DgroupId=com.dameng' `
@@ -96,30 +95,31 @@ jobs:
               '-Dpackaging=jar' `
               -B -q
             if ($LASTEXITCODE -eq 0) {
-              Write-Host "DM JDBC driver installed"
+              Write-Host "DM JDBC driver installed successfully"
             } else {
-              Write-Host "DM JDBC driver install failed, exit code: $LASTEXITCODE"
-              exit 1
+              Write-Host "::warning::DM JDBC driver install failed (exit $LASTEXITCODE), building without DM support"
             }
           } else {
-            Write-Host "DM JDBC driver not found, skipping"
+            Write-Host "::warning::DM JDBC driver jar not found, building without DM support"
           }
 
       # ============================================================
       # 6. Build backend Spring Boot jar
       # ============================================================
       - name: Build backend jar
-        if: ${{ github.event.inputs.skip_backend != 'true' }}
         working-directory: backend
-        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          Write-Host "Building backend with Maven..."
           mvn package -DskipTests -B -q
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Backend build failed (exit $LASTEXITCODE)"
+            exit 1
+          }
+          Write-Host "Backend build completed"
 
       - name: Verify jar exists
         working-directory: backend
-        shell: pwsh
         run: |
           $jar = "devnest-boot/target/devnest-boot-1.0.0.jar"
           if (-not (Test-Path $jar)) {
@@ -133,11 +133,10 @@ jobs:
       # 7. Copy jar to Tauri resources
       # ============================================================
       - name: Copy jar to Tauri resources
-        shell: pwsh
         run: |
           $resourcesDir = "frontend-ui/src-tauri/resources"
           if (-not (Test-Path $resourcesDir)) {
-            New-Item -ItemType Directory -Path $resourcesDir -Force
+            New-Item -ItemType Directory -Path $resourcesDir -Force | Out-Null
           }
           Copy-Item "backend/devnest-boot/target/devnest-boot-1.0.0.jar" `
                     "$resourcesDir/devnest-boot.jar" -Force
@@ -155,14 +154,33 @@ jobs:
       # ============================================================
       - name: Build Tauri app
         working-directory: frontend-ui
-        run: npm run tauri build
+        env:
+          # Prevent Tauri from trying to start backend during build
+          TAURI_ENV: production
+        run: |
+          $ErrorActionPreference = 'Continue'
+          Write-Host "Building Tauri app (this may take 10-20 minutes on first run)..."
+          npm run tauri build 2>&1
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            Write-Error "Tauri build failed (exit $exitCode)"
+            # Print last 50 lines of output for debugging
+            Write-Host "::group::Debug: bundle directory contents"
+            if (Test-Path "src-tauri/target/release/bundle") {
+              Get-ChildItem -Recurse "src-tauri/target/release/bundle" | Select-Object FullName, Length
+            } else {
+              Write-Host "Bundle directory not found"
+            }
+            Write-Host "::endgroup"
+            exit 1
+          }
+          Write-Host "Tauri build completed successfully"
 
       # ============================================================
       # 10. Upload artifacts
       # ============================================================
       - name: Find build outputs
         id: find
-        shell: pwsh
         run: |
           $bundleDir = "frontend-ui/src-tauri/target/release/bundle"
           $msi = Get-ChildItem "$bundleDir/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -170,6 +188,14 @@ jobs:
 
           if ($msi) { Write-Host "MSI: $($msi.Name) ($([math]::Round($msi.Length/1MB,1)) MB)" }
           if ($nsis) { Write-Host "EXE: $($nsis.Name) ($([math]::Round($nsis.Length/1MB,1)) MB)" }
+          if (-not $msi -and -not $nsis) {
+            Write-Host "::warning::No installer files found in bundle directory"
+            if (Test-Path $bundleDir) {
+              Get-ChildItem -Recurse $bundleDir | Select-Object FullName
+            } else {
+              Write-Host "Bundle directory does not exist"
+            }
+          }
 
           if ($msi) { echo "msi_path=$($msi.FullName)" >> $env:GITHUB_OUTPUT }
           if ($nsis) { echo "exe_path=$($nsis.FullName)" >> $env:GITHUB_OUTPUT }
