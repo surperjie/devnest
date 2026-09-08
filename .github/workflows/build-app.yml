@@ -24,7 +24,7 @@ on:
 
 env:
   JAVA_VERSION: '21'
-  NODE_VERSION: '20'
+  NODE_VERSION: '24'
 
 jobs:
   build:
@@ -37,13 +37,13 @@ jobs:
       # 1. Checkout
       # ============================================================
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ============================================================
       # 2. Setup JDK 21 (Temurin)
       # ============================================================
       - name: Setup JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -53,9 +53,9 @@ jobs:
       # 3. Setup Node.js
       # ============================================================
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: frontend-ui/package-lock.json
 
@@ -68,7 +68,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -83,7 +83,9 @@ jobs:
       # ============================================================
       - name: Install DM JDBC driver
         working-directory: backend
+        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           $jar = "lib/DmJdbcDriver18-8.1.3.140.jar"
           if (Test-Path $jar) {
             mvn install:install-file `
@@ -92,7 +94,7 @@ jobs:
               -DartifactId=DmJdbcDriver18 `
               -Dversion=8.1.3.140 `
               -Dpackaging=jar `
-              -q
+              -B -q
             Write-Host "DM JDBC driver installed"
           } else {
             Write-Host "DM JDBC driver not found, skipping"
@@ -104,10 +106,15 @@ jobs:
       - name: Build backend jar
         if: ${{ github.event.inputs.skip_backend != 'true' }}
         working-directory: backend
-        run: mvn package -DskipTests -B -q
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          mvn package -DskipTests -B -q
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Verify jar exists
         working-directory: backend
+        shell: pwsh
         run: |
           $jar = "devnest-boot/target/devnest-boot-1.0.0.jar"
           if (-not (Test-Path $jar)) {
@@ -121,6 +128,7 @@ jobs:
       # 7. Copy jar to Tauri resources
       # ============================================================
       - name: Copy jar to Tauri resources
+        shell: pwsh
         run: |
           $resourcesDir = "frontend-ui/src-tauri/resources"
           if (-not (Test-Path $resourcesDir)) {
@@ -149,6 +157,7 @@ jobs:
       # ============================================================
       - name: Find build outputs
         id: find
+        shell: pwsh
         run: |
           $bundleDir = "frontend-ui/src-tauri/target/release/bundle"
           $msi = Get-ChildItem "$bundleDir/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
