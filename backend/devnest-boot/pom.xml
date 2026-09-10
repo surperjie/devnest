@@ -32,6 +32,10 @@
             <groupId>com.devnest</groupId>
             <artifactId>devnest-redis</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.devnest</groupId>
+            <artifactId>devnest-pipeline</artifactId>
+        </dependency>
 
         <!-- 数据库驱动(按 profile 切换) -->
         <dependency>

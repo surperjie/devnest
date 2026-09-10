@@ -44,6 +44,18 @@ const routes = [
         component: () => import("../views/redis/RedisExplorer.vue"),
         meta: { title: "Redis 浏览器", icon: "Key", hidden: true },
       },
+      {
+        path: "pipeline",
+        name: "pipeline",
+        component: () => import("../views/pipeline/PipelineList.vue"),
+        meta: { title: "流水线", icon: "Connection" },
+      },
+      {
+        path: "pipeline/runs",
+        name: "pipeline-runs",
+        component: () => import("../views/pipeline/PipelineRunWorkspace.vue"),
+        meta: { title: "流水线运行", icon: "Connection", hidden: true },
+      },
     ],
   },
 ];

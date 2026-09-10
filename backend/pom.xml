@@ -22,6 +22,7 @@
         <module>devnest-console</module>
         <module>devnest-datasource</module>
         <module>devnest-redis</module>
+        <module>devnest-pipeline</module>
         <module>devnest-boot</module>
     </modules>
 
@@ -88,6 +89,11 @@
             <dependency>
                 <groupId>com.devnest</groupId>
                 <artifactId>devnest-redis</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.devnest</groupId>
+                <artifactId>devnest-pipeline</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

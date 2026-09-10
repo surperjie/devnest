@@ -35,6 +35,11 @@ devnest:
     heartbeat-interval-s: 10
     heartbeat-timeout-ms: 3000
     connect-timeout-ms: 5000
+  # 流水线运行参数
+  pipeline:
+    workspace-dir: data/pipeline
+    max-concurrent-runs: 5
+    output-charset: auto
 
 # Actuator:仅暴露健康检查/信息/优雅关闭,详细数据要求 IP 白名单
 management:

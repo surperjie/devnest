@@ -38,6 +38,14 @@ public enum ErrorCode {
     REDIS_COMMAND_BLOCKED(4010, "Redis 命令被白名单拦截"),
     REDIS_COMMAND_EXEC_FAILED(4011, "Redis 命令执行失败"),
 
+    PIPELINE_NOT_FOUND(5001, "流水线不存在"),
+    PIPELINE_NAME_DUPLICATED(5002, "流水线名称重复"),
+    PIPELINE_ALREADY_RUNNING(5003, "该流水线正在运行中,请等待结束后再运行"),
+    PIPELINE_RUN_NOT_FOUND(5004, "运行记录不存在"),
+    PIPELINE_RUN_NOT_ACTIVE(5005, "该运行已不在活动状态"),
+    PIPELINE_STEP_EMPTY(5006, "流水线至少需要配置一个启用的步骤"),
+    PIPELINE_RUN_CAP_REACHED(5007, "并发运行数已达上限,请稍后再试"),
+
     PARAM_INVALID(6000, "参数校验失败"),
     INTERNAL_ERROR(6001, "系统异常");
 
