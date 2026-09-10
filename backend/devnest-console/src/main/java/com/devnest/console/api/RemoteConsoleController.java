@@ -33,6 +33,7 @@ import java.util.List;
 public class RemoteConsoleController {
 
     private final RemoteConsoleService remoteConsoleService;
+    private final WsTokenManager wsTokenManager;
 
     @GetMapping("/consoles")
     public ApiResult<List<RemoteConsoleDto>> list() {
@@ -80,6 +81,6 @@ public class RemoteConsoleController {
     public ApiResult<String> issueWsToken(@PathVariable Long id) {
         // 先确认存在,避免给无效 ID 发 token
         remoteConsoleService.getConsole(id);
-        return ApiResult.ok(WsTokenManager.issue(id));
+        return ApiResult.ok(wsTokenManager.issue(id));
     }
 }

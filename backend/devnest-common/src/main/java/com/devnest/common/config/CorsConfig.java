@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -20,7 +21,8 @@ import java.util.List;
 /**
  * CORS 安全配置.
  * <p>
- * 1) allowedOriginPatterns 精确白名单(前端开发端口 1420 + Tauri 协议),默认不允许任何未列的来源.
+ * 1) allowedOriginPatterns 精确白名单(默认前端开发端口 1420 + Tauri 协议),未列的来源一律拒绝.
+ *    白名单由 devnest.cors.allowed-origins 提供,便于后端部署到服务器后按实际访问域名调整,无需改代码.
  * 2) 额外 Filter 兜底:若请求带 Origin 头且不在白名单,响应里禁止浏览器读取(返回 403 CORS_ORIGIN_BLOCKED).
  *    这能拦截 WebMvc CorsRegistry 在 Spring 版本差异或 mapping 未覆盖时的静默放行.
  *
@@ -32,24 +34,37 @@ public class CorsConfig implements WebMvcConfigurer {
 
     private static final Logger log = LoggerFactory.getLogger(CorsConfig.class);
 
-    static final List<String> ALLOWED_ORIGINS = Arrays.asList(
+    /** 默认放行来源:单机形态的前端开发端口与 Tauri 协议 */
+    static final List<String> DEFAULT_ALLOWED_ORIGINS = Arrays.asList(
             "http://127.0.0.1:1420",
             "http://localhost:1420",
             "tauri://localhost",
             "http://tauri.localhost"
     );
 
+    private final List<String> allowedOrigins;
+
+    public CorsConfig(@Value("${devnest.cors.allowed-origins:}") String configuredOrigins) {
+        this.allowedOrigins = (configuredOrigins == null || configuredOrigins.isBlank())
+                ? DEFAULT_ALLOWED_ORIGINS
+                : Arrays.stream(configuredOrigins.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .toList();
+        log.info("CORS 放行来源: {}", allowedOrigins);
+    }
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOriginPatterns(ALLOWED_ORIGINS.toArray(new String[0]))
+                .allowedOriginPatterns(allowedOrigins.toArray(new String[0]))
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin")
                 .exposedHeaders("Content-Disposition")
                 .allowCredentials(true)
                 .maxAge(3600);
         registry.addMapping("/ws/**")
-                .allowedOriginPatterns(ALLOWED_ORIGINS.toArray(new String[0]))
+                .allowedOriginPatterns(allowedOrigins.toArray(new String[0]))
                 .allowedMethods("GET", "POST", "OPTIONS")
                 .allowCredentials(true)
                 .maxAge(3600);
@@ -66,7 +81,7 @@ public class CorsConfig implements WebMvcConfigurer {
             protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                             FilterChain chain) throws ServletException, IOException {
                 String origin = request.getHeader("Origin");
-                if (origin != null && !origin.isEmpty() && !ALLOWED_ORIGINS.contains(origin)) {
+                if (origin != null && !origin.isEmpty() && !allowedOrigins.contains(origin)) {
                     log.warn("拦截非法 Origin 请求: method={} uri={} origin={}",
                             request.getMethod(), request.getRequestURI(), origin);
                     response.setStatus(HttpServletResponse.SC_FORBIDDEN);

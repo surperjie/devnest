@@ -30,6 +30,12 @@ public class ConsoleHandshakeInterceptor implements HandshakeInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(ConsoleHandshakeInterceptor.class);
 
+    private final WsTokenManager wsTokenManager;
+
+    public ConsoleHandshakeInterceptor(WsTokenManager wsTokenManager) {
+        this.wsTokenManager = wsTokenManager;
+    }
+
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
                                    WebSocketHandler wsHandler, Map<String, Object> attributes) {
@@ -63,7 +69,7 @@ public class ConsoleHandshakeInterceptor implements HandshakeInterceptor {
         }
 
         try {
-            WsTokenManager.verifyAndConsume(token, consoleId);
+            wsTokenManager.verifyAndConsume(token, consoleId);
             log.info("WS握手通过: consoleId={}, client={}", consoleId, client);
         } catch (BizException e) {
             reject(response, 401, e.getMessage());

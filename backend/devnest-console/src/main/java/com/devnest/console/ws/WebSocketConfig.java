@@ -19,11 +19,12 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class WebSocketConfig implements WebSocketConfigurer {
 
     private final ConsoleWebSocketHandler consoleWebSocketHandler;
+    private final WsTokenManager wsTokenManager;
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(consoleWebSocketHandler, "/ws/console/{consoleId}")
                 .setAllowedOriginPatterns("*")
-                .addInterceptors(new ConsoleHandshakeInterceptor());
+                .addInterceptors(new ConsoleHandshakeInterceptor(wsTokenManager));
     }
 }

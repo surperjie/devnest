@@ -25,7 +25,8 @@ public enum ErrorCode {
     DATASOURCE_NAME_DUPLICATED(3002, "数据源名称重复"),
     DATASOURCE_CONNECT_FAILED(3003, "数据源连接失败"),
     DATASOURCE_UNSUPPORTED_TYPE(3004, "不支持的数据库类型(驱动未安装)"),
-    SQL_BLOCKED_BY_WHITELIST(3010, "SQL 被白名单拦截(仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN)"),
+    DATASOURCE_POOL_LIMIT_EXCEEDED(3005, "连接池数量已达上限,请先删除不再使用的数据源"),
+    SQL_BLOCKED_BY_BLACKLIST(3010, "SQL 被安全策略拦截(禁止文件读写、盲注探测、动态执行等危险操作)"),
     SQL_EXECUTE_FAILED(3011, "SQL 执行失败"),
     SQL_RESULT_TOO_LARGE(3012, "SQL 返回行数超过上限,请加 LIMIT"),
 

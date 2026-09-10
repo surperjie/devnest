@@ -18,7 +18,7 @@ import org.springframework.security.web.util.matcher.IpAddressMatcher;
  * 修复:
  * 1) /actuator/shutdown 仅允许 127.0.0.1 / ::1 访问
  * 2) /actuator/health 详细信息(/actuator/health 所有路径)仅本地;外部请求只能看到 UP/DOWN
- * 3) 其它 actuator 端点全部禁用(通过白名单 include 已只暴露 health,info,shutdown;这里再做兜底)
+ * 3) 其它 actuator 端点(含 metrics)仅本机可访问 —— 白名单 include 只放行 health,info,shutdown,metrics
  * 4) 业务 REST API /ws 不启用 security(当前是 127.0.0.1 绑卡+CORS+TOFU 三层保护)
  *
  * @Author Ajiejiejie
