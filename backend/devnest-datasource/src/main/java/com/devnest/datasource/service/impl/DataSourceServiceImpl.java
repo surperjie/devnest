@@ -1,5 +1,6 @@
 package com.devnest.datasource.service.impl;
 
+import com.devnest.common.context.CurrentUserProvider;
 import com.devnest.common.crypto.CryptoService;
 import com.devnest.common.exception.BizException;
 import com.devnest.common.exception.ErrorCode;
@@ -11,11 +12,13 @@ import com.devnest.datasource.entity.DataSourceConfig;
 import com.devnest.datasource.mapper.DataSourceMapper;
 import com.devnest.datasource.repository.DataSourceConfigRepository;
 import com.devnest.datasource.service.DataSourceService;
+import com.devnest.datasource.service.DatabaseQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * @Author Ajiejiejie
@@ -30,6 +33,9 @@ public class DataSourceServiceImpl implements DataSourceService {
     private final CryptoService crypto;
     private final HikariPoolFactory poolFactory;
     private final TunnelPortForwarder portForwarder;
+    private final CurrentUserProvider currentUserProvider;
+    /** 连接池与隧道端口的缓存归它管理,配置变更/删除时需要通知它丢弃缓存 */
+    private final DatabaseQueryService databaseQueryService;
 
     @Override
     public List<DataSourceDto> listAll() {
@@ -52,6 +58,8 @@ public class DataSourceServiceImpl implements DataSourceService {
         }
         DataSourceConfig entity = new DataSourceConfig();
         applyRequest(entity, req);
+        // 归属者:单机为本机用户名;多人共用时用于数据源访问控制
+        entity.setOwner(currentUserProvider.currentUser());
         return mapper.toDto(repo.save(entity));
     }
 
@@ -62,15 +70,23 @@ public class DataSourceServiceImpl implements DataSourceService {
         if (!entity.getName().equals(req.getName()) && repo.existsByName(req.getName())) {
             throw new BizException(ErrorCode.DATASOURCE_NAME_DUPLICATED);
         }
+        // 变更前的连接参数指纹:只有"物理连接目标"变了才需要丢弃已有连接池
+        String before = connectionFingerprint(entity);
         applyRequest(entity, req);
-        return mapper.toDto(repo.save(entity));
+        DataSourceConfig saved = repo.save(entity);
+        if (!before.equals(connectionFingerprint(saved))) {
+            // 改了 host/端口/库名/账号/密码/隧道:旧连接已指向错误目标,必须丢弃
+            databaseQueryService.evict(id);
+        }
+        return mapper.toDto(saved);
     }
 
     @Override
     @Transactional
     public void delete(Long id) {
         DataSourceConfig entity = findOrThrow(id);
-        poolFactory.destroyPool(poolKey(id));
+        // 连接池与隧道端口统一交给连接缓存管理方回收,避免只关池而漏掉隧道端口
+        databaseQueryService.evict(id);
         repo.delete(entity);
     }
 
@@ -110,9 +126,24 @@ public class DataSourceServiceImpl implements DataSourceService {
         return poolFactory.probe(jdbcUrl, driver, ds.getUsername(), password, 3000);
     }
 
-    /** 构建连接池 key(含版本号,配置变更时 rebuild 用) */
+    /** 构建连接池 key;配置变更时由 DatabaseQueryService.evict 丢弃旧池,再按新配置重建 */
     static String poolKey(Long datasourceId) {
         return "ds:" + datasourceId;
+    }
+
+    /**
+     * 连接参数指纹:只有这些字段变化才会改变物理连接目标.
+     * 改名/改备注不该触发连接池重建,否则会平白打断别人正在跑的查询.
+     */
+    private static String connectionFingerprint(DataSourceConfig ds) {
+        return String.join("|",
+                Objects.toString(ds.getDbType(), ""),
+                Objects.toString(ds.getHost(), ""),
+                Objects.toString(ds.getPort(), ""),
+                Objects.toString(ds.getDatabaseName(), ""),
+                Objects.toString(ds.getUsername(), ""),
+                Objects.toString(ds.getPasswordCipher(), ""),
+                Objects.toString(ds.getTunnelBastionId(), ""));
     }
 
     /** 构建 JDBC URL,通过隧道时 host=127.0.0.1 + 转发端口 */

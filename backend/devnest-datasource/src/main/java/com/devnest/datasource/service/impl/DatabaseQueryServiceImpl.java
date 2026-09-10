@@ -1,5 +1,6 @@
 package com.devnest.datasource.service.impl;
 
+import com.devnest.common.context.CurrentUserProvider;
 import com.devnest.common.crypto.CryptoService;
 import com.devnest.common.exception.BizException;
 import com.devnest.common.exception.ErrorCode;
@@ -21,6 +22,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -28,6 +30,9 @@ import org.springframework.stereotype.Service;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 数据库查询服务实现.
@@ -57,10 +62,26 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
     private final CryptoService crypto;
     private final HikariPoolFactory poolFactory;
     private final TunnelPortForwarder portForwarder;
+    private final CurrentUserProvider currentUserProvider;
 
-    /** datasourceId → 运行时连接上下文 */
+    /** 单条 SQL 最长执行秒数(<=0 表示不限制),防止慢查询长期占用连接池 */
+    @Value("${devnest.datasource.query-timeout-seconds:30}")
+    private int queryTimeoutSeconds;
+
+    /** 旧连接上下文延迟回收秒数:给进行中的 SQL 留出收尾时间 */
+    private static final long RELEASE_DELAY_SECONDS = 5L;
+
+    /** datasourceId → 运行时连接上下文;配置变更/删除时由 evict 移除,下次查询按最新配置重建 */
     private final Map<Long, ConnContext> connMap = new ConcurrentHashMap<>();
     private record ConnContext(HikariDataSource pool, Integer tunnelLocalPort) {}
+
+    /** 延迟回收旧连接池与隧道端口,避免配置变更时打断进行中的查询 */
+    private final ScheduledExecutorService releaseScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ds-ctx-release");
+                t.setDaemon(true);
+                return t;
+            });
 
     // ==================== Schema 元数据 ====================
 
@@ -318,6 +339,7 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
                     || upper.startsWith("EXPLAIN") || upper.startsWith("WITH")) {
                 try (PreparedStatement ps = conn.prepareStatement(sql,
                         ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+                    applyQueryTimeout(ps);
                     ps.setFetchSize(Math.min(maxRows, 200));
                     try (ResultSet rs = ps.executeQuery()) {
                         ResultSetMetaData meta = rs.getMetaData();
@@ -353,6 +375,7 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
                 }
             } else {
                 try (Statement st = conn.createStatement()) {
+                    applyQueryTimeout(st);
                     int affected = st.executeUpdate(sql);
                     item.setAffectedRows(affected);
                 }
@@ -367,6 +390,21 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
         return item;
     }
 
+    /**
+     * 单条 SQL 执行超时保护:防止慢查询/异常 SQL 长期占用连接池连接(多人共用时尤为关键).
+     * 驱动不支持该设置时降级为不限制,不影响正常执行.
+     */
+    private void applyQueryTimeout(Statement st) {
+        if (queryTimeoutSeconds <= 0) {
+            return;
+        }
+        try {
+            st.setQueryTimeout(queryTimeoutSeconds);
+        } catch (SQLException e) {
+            log.debug("设置查询超时失败,降级为不限制: {}", e.getMessage());
+        }
+    }
+
     private void logExecution(Long datasourceId, String dsName, String sql, SqlResultItem item) {
         try {
             SqlExecutionLog logEntity = new SqlExecutionLog();
@@ -377,6 +415,7 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
             logEntity.setErrorMsg(item.getErrorMsg());
             logEntity.setCostMs(item.getCostMs());
             logEntity.setRowCount(item.getRows() != null ? item.getRows().size() : item.getAffectedRows());
+            logEntity.setOperator(currentUserProvider.currentUser());
             logRepo.save(logEntity);
         } catch (Exception e) {
             log.warn("SQL 日志保存失败: {}", e.getMessage());
@@ -554,6 +593,47 @@ public class DatabaseQueryServiceImpl implements DatabaseQueryService {
     }
 
     // ==================== 连接上下文管理 ====================
+
+    /**
+     * 丢弃缓存的连接上下文.
+     * <p>
+     * 缓存立即失效(下次查询按最新配置重建连接),旧连接池与隧道端口延迟
+     * {@link #RELEASE_DELAY_SECONDS} 秒回收,让已经开始执行的查询跑完再断.
+     * 隧道端口必须与连接池在同一时机释放:池内连接指向该端口,先释放端口会留下一批死连接.
+     */
+    @Override
+    public void evict(Long datasourceId) {
+        ConnContext old = connMap.remove(datasourceId);
+        if (old == null) {
+            return;
+        }
+        log.info("数据源 {} 连接上下文已失效,旧连接将在 {}s 后回收", datasourceId, RELEASE_DELAY_SECONDS);
+        releaseScheduler.schedule(() -> releaseContext(datasourceId, old),
+                RELEASE_DELAY_SECONDS, TimeUnit.SECONDS);
+    }
+
+    /** 回收旧上下文:先关池断开连接,再释放隧道端口 */
+    private void releaseContext(Long datasourceId, ConnContext ctx) {
+        try {
+            poolFactory.destroyPool(DataSourceServiceImpl.poolKey(datasourceId));
+        } catch (Exception e) {
+            log.warn("回收数据源 {} 的连接池失败: {}", datasourceId, e.getMessage());
+        }
+        if (ctx.tunnelLocalPort() != null) {
+            try {
+                portForwarder.releaseTunnel(ctx.tunnelLocalPort());
+            } catch (Exception e) {
+                log.warn("释放数据源 {} 的隧道端口 {} 失败: {}",
+                        datasourceId, ctx.tunnelLocalPort(), e.getMessage());
+            }
+        }
+    }
+
+    /** 容器销毁:停止延迟回收线程(连接池与隧道端口由各自的生命周期钩子统一关闭) */
+    @jakarta.annotation.PreDestroy
+    void shutdownReleaseScheduler() {
+        releaseScheduler.shutdownNow();
+    }
 
     private ConnContext getOrCreateContext(DataSourceConfig ds) {
         return connMap.computeIfAbsent(ds.getId(), id -> {

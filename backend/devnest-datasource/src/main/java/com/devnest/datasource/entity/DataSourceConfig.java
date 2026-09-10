@@ -60,6 +60,19 @@ public class DataSourceConfig extends BaseEntity {
     @Column(name = "remark", length = 255)
     private String remark;
 
+    /**
+     * 归属用户:单机形态为本机用户名,多人共用时用于数据源访问控制.
+     */
+    @Column(name = "owner", length = 64)
+    private String owner;
+
+    /**
+     * 可见性:PRIVATE=仅归属者可见,PUBLIC=团队可见.
+     * 当前单机形态默认 PUBLIC(不改变现有行为),为多人共用预留.
+     */
+    @Column(name = "visibility", length = 16)
+    private String visibility = "PUBLIC";
+
     @Transient
     public String decryptPassword(CryptoService crypto) {
         return crypto.decrypt(passwordCipher);

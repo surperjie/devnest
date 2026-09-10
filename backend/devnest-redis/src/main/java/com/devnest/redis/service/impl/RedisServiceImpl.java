@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -90,9 +91,13 @@ public class RedisServiceImpl implements RedisService {
         if (!entity.getName().equals(req.name()) && repo.existsByName(req.name())) {
             throw new BizException(ErrorCode.REDIS_NAME_DUPLICATED);
         }
+        // 变更前的连接参数指纹:只有会影响连接目标/池行为的字段变了才需要重建池
+        String before = connectionFingerprint(entity);
         applyRequest(entity, req, true);
         RedisInstanceConfig saved = repo.save(entity);
-        poolFactory.rebuildPool(id);
+        if (!before.equals(connectionFingerprint(saved))) {
+            poolFactory.rebuildPool(id);
+        }
         return toDto(saved);
     }
 
@@ -267,6 +272,22 @@ public class RedisServiceImpl implements RedisService {
                 entity.setPasswordCipher(crypto.encrypt(pwd));
             }
         }
+    }
+
+    /**
+     * 连接参数指纹:只有这些字段变化才会改变连接目标或连接池行为.
+     * <p>
+     * 刻意不含 dbIndex —— 每次取连接后都会显式 {@code select(dbIndex)},
+     * 换默认库不影响已建好的池,无需重建.也不含 name/remark 这类展示字段.
+     */
+    private static String connectionFingerprint(RedisInstanceConfig cfg) {
+        return String.join("|",
+                Objects.toString(cfg.getHost(), ""),
+                Objects.toString(cfg.getPort(), ""),
+                Objects.toString(cfg.getPasswordCipher(), ""),
+                Objects.toString(cfg.getTimeoutMs(), ""),
+                Objects.toString(cfg.getMaxConnections(), ""),
+                Objects.toString(cfg.getSshBastionId(), ""));
     }
 
     private RedisInstanceConfigDto toDto(RedisInstanceConfig e) {

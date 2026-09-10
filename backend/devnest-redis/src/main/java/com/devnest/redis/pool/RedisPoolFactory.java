@@ -4,6 +4,7 @@ import com.devnest.common.exception.BizException;
 import com.devnest.common.exception.ErrorCode;
 import com.devnest.core.spi.TunnelPortForwarder;
 import com.devnest.redis.entity.RedisInstanceConfig;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -120,6 +121,9 @@ public class RedisPoolFactory {
 
     /**
      * 配置变更后重建池(先销毁再懒加载).
+     * <p>
+     * 是否需要重建由调用方判断:只有连接目标或池参数变化时才调用,
+     * 改名/改备注这类不影响连接的修改不该打断正在执行的命令.
      */
     public void rebuildPool(Long instanceId) {
         destroyPool(poolKey(instanceId));
@@ -127,7 +131,11 @@ public class RedisPoolFactory {
 
     /**
      * 服务关闭时释放全部资源.
+     * <p>
+     * 必须挂 {@code @PreDestroy}:Spring 只回调标记了该注解/接口的方法,
+     * 否则应用关闭时本 Bean 持有的 JedisPool 与隧道端口都不会被释放.
      */
+    @PreDestroy
     public void shutdown() {
         pools.keySet().forEach(this::destroyPool);
     }

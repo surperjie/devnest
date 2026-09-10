@@ -48,4 +48,11 @@ public class SqlExecutionLog extends BaseEntity {
 
     @Column(name = "row_count")
     private Integer rowCount;
+
+    /**
+     * 操作者标识:单机形态为本机登录用户名,多人共用时为登录用户.
+     * 用于审计追溯(谁执行的这条 SQL).
+     */
+    @Column(name = "operator", length = 64)
+    private String operator;
 }

@@ -22,5 +22,7 @@ public class SqlLogDto {
     private String errorMsg;
     private Long costMs;
     private Integer rowCount;
+    /** 操作者:单机为本机用户名,多人共用时为登录用户 */
+    private String operator;
     private LocalDateTime createTime;
 }

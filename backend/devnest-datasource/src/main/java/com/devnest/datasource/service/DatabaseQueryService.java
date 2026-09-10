@@ -31,4 +31,11 @@ public interface DatabaseQueryService {
 
     /** 获取最近 SQL(快捷复用) */
     List<SqlLogDto> getRecentSql(Long datasourceId);
+
+    /**
+     * 丢弃缓存的连接上下文(数据源配置变更、数据源删除时调用).
+     * 缓存立即失效,下次查询按最新配置重建连接;旧连接池与隧道端口延迟回收,
+     * 避免打断进行中的查询.
+     */
+    void evict(Long datasourceId);
 }
