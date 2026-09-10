@@ -41,5 +41,39 @@
             <groupId>redis.clients</groupId>
             <artifactId>jedis</artifactId>
         </dependency>
+
+        <!-- 单元测试:守护"配置变更重建连接池"的触发条件 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <!-- ============================================================
+         模块边界强制(validate 阶段,违规即构建失败)
+         依赖方向:common ← core ← {tunnel, console, datasource, redis, pipeline} ← boot
+         业务模块之间禁止横向依赖,隧道能力一律走 core.spi 接口
+         ============================================================ -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <configuration>
+                    <rules>
+                        <bannedDependencies>
+                            <excludes>
+                                <exclude>com.devnest:devnest-tunnel</exclude>
+                                <exclude>com.devnest:devnest-console</exclude>
+                                <exclude>com.devnest:devnest-datasource</exclude>
+                                <exclude>com.devnest:devnest-pipeline</exclude>
+                                <exclude>com.devnest:devnest-boot</exclude>
+                            </excludes>
+                        </bannedDependencies>
+                    </rules>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

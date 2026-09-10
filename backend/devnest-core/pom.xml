@@ -59,5 +59,45 @@
             <groupId>com.fasterxml.jackson.module</groupId>
             <artifactId>jackson-module-blackbird</artifactId>
         </dependency>
+
+        <!-- 单元测试:用 H2 内存库跑真实 Hikari,验证连接池生命周期与数量闸门 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <!-- ============================================================
+         模块边界强制(validate 阶段,违规即构建失败)
+         依赖方向:common ← core ← {tunnel, console, datasource, redis, pipeline} ← boot
+         core 只允许依赖 common;禁止反向依赖业务模块,也禁止依赖 boot
+         ============================================================ -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <configuration>
+                    <rules>
+                        <bannedDependencies>
+                            <excludes>
+                                <exclude>com.devnest:devnest-tunnel</exclude>
+                                <exclude>com.devnest:devnest-console</exclude>
+                                <exclude>com.devnest:devnest-datasource</exclude>
+                                <exclude>com.devnest:devnest-redis</exclude>
+                                <exclude>com.devnest:devnest-pipeline</exclude>
+                                <exclude>com.devnest:devnest-boot</exclude>
+                            </excludes>
+                        </bannedDependencies>
+                    </rules>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

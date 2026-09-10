@@ -44,4 +44,32 @@
             <artifactId>mapstruct</artifactId>
         </dependency>
     </dependencies>
+
+    <!-- ============================================================
+         模块边界强制(validate 阶段,违规即构建失败)
+         依赖方向:common ← core ← {tunnel, console, datasource, redis, pipeline} ← boot
+         console 与 tunnel 的交互必须经 core.spi.TunnelPortForwarder,
+         此规则确保不会有人把 tunnel 实现类直接引进来
+         ============================================================ -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <configuration>
+                    <rules>
+                        <bannedDependencies>
+                            <excludes>
+                                <exclude>com.devnest:devnest-tunnel</exclude>
+                                <exclude>com.devnest:devnest-datasource</exclude>
+                                <exclude>com.devnest:devnest-redis</exclude>
+                                <exclude>com.devnest:devnest-pipeline</exclude>
+                                <exclude>com.devnest:devnest-boot</exclude>
+                            </excludes>
+                        </bannedDependencies>
+                    </rules>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
