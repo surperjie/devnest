@@ -80,6 +80,20 @@ npm run tauri:dev
 产物:`frontend-ui/src-tauri/target/release/bundle/`(NSIS exe / MSI)。
 注意:本地产物未做代码签名,安装时可能触发 SmartScreen。
 
+### 打包后的运行方式(零配置)
+
+安装后双击即用,不需要装数据库、不需要改任何配置:
+
+- 首次启动自动创建 `%LOCALAPPDATA%\DevNest\`,后端以 `desktop` profile 启动,使用内嵌 H2 文件库;
+- 数据落点(固定,不随启动位置漂移):
+  - 配置库 `%LOCALAPPDATA%\DevNest\data\devnest.mv.db`
+  - 流水线工作区 `%LOCALAPPDATA%\DevNest\data\pipeline\`
+  - 加密主密钥 `%USERPROFILE%\.devnest\master.key`(首次启动自动生成)
+- 关闭窗口时先请求后端优雅退出(`POST /actuator/shutdown`),超时才强杀,避免 H2 数据损坏;
+- 重复启动会直接退出(单实例锁 `%LOCALAPPDATA%\DevNest\app.lock`),不会出现两个实例互抢后端;
+- 若 `38080` 被其它程序占用,会弹窗明确提示(而不是静默失败);
+- 后端起不来时,弹窗会附带 `%TEMP%\devnest-backend.log` 的日志尾部,便于定位。
+
 ### CI
 
 推送后由 `.github/workflows/build-app.yml` 执行同一套流程并产出带签名/发布的安装包。
