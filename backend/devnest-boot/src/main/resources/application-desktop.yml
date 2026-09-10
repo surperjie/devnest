@@ -1,0 +1,22 @@
+# 桌面打包 profile:内嵌 H2 文件库,开箱即用,不需要任何外部数据库/配置.
+#
+# 由桌面壳(frontend-ui/src-tauri/src/lib.rs)以 --spring.profiles.active=desktop 启动,
+# 同时把后端进程的工作目录固定为 %LOCALAPPDATA%\DevNest,因此:
+#   配置库   -> <工作目录>/data/devnest.mv.db
+#   流水线   -> <工作目录>/data/pipeline(见 application.yml 的 devnest.pipeline.workspace-dir)
+# 相对路径一定落在该可写目录内,不会因"双击启动时当前目录不同"而漂移或失败.
+#
+# 与 dev profile 的区别:dev 面向开发(开 SQL 日志),desktop 面向交付(日志收敛,只留 INFO).
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/devnest;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    com.devnest: INFO
+    org.hibernate.SQL: WARN

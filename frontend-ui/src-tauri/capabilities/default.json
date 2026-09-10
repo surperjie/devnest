@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "DevNest default capability",
   "windows": ["main"],
-  "permissions": ["core:default", "shell:allow-open", "dialog:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

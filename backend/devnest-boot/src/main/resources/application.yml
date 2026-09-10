@@ -1,10 +1,17 @@
 server:
-  address: 127.0.0.1   # 仅绑回环,杜绝局域网/外网暴露
+  address: ${DEVNEST_SERVER_ADDRESS:127.0.0.1}   # 仅绑回环,杜绝局域网/外网暴露;部署到服务器时用环境变量覆盖
   port: 38080
+  shutdown: graceful   # 关闭时先停止接收新请求,等在途请求处理完再退出
 
 spring:
+  config:
+    # 本地覆盖文件(已被 .gitignore 忽略):把 DEVNEST_* 等环境变量写进项目根 .env 即可,
+    # 免去每次在 PowerShell 里手动 $env: 赋值;文件不存在时静默跳过.
+    import: optional:file:./.env[.properties]
   application:
     name: devnest-backend
+  lifecycle:
+    timeout-per-shutdown-phase: 10s   # 优雅关闭最长等 10s,超时强制收尾(桌面壳侧对应 10s 兜底强杀)
   datasource:
     # H2 文件库(项目根 data/ 下),数据落盘持久化,重启不丢
     # DB_CLOSE_DELAY=-1 防连接池关闭时 drop;MODE=MySQL 与 prod 一致
@@ -35,18 +42,33 @@ devnest:
     heartbeat-interval-s: 10
     heartbeat-timeout-ms: 3000
     connect-timeout-ms: 5000
+  # 前端来源白名单(逗号分隔):单机为开发端口 + Tauri 协议,部署到服务器后按实际域名调整
+  cors:
+    allowed-origins: http://127.0.0.1:1420,http://localhost:1420,tauri://localhost,http://tauri.localhost
+  # 业务数据源查询参数
+  datasource:
+    # 单条 SQL 最长执行秒数(<=0 表示不限制),防止慢查询长期占用连接池
+    query-timeout-seconds: 30
+  # 动态业务数据源连接池(与本地配置库连接池隔离);理论最大连接数 ≈ max-pools × max-pool-size
+  pool:
+    max-pool-size: 8            # 单个池最大连接数(单机工具用不到太多,过大反而挤占目标库连接)
+    min-idle: 1                 # 空闲时保留的连接数;设 0 则全部归还,代价是首次查询需重建连接
+    idle-timeout-ms: 600000     # 池内空闲连接存活 10min,超时归还目标库
+    connection-timeout-ms: 2000 # 获取连接最长等待,超时快速失败而不是无限阻塞
+    leak-detection-ms: 2000     # 连接借出超时未归还即告警;须为 0(禁用)或 >=2000
+    max-pools: 20               # 同时存在的池数量上限,防止池无界增长耗尽目标库连接/本机句柄
   # 流水线运行参数
   pipeline:
     workspace-dir: data/pipeline
     max-concurrent-runs: 5
     output-charset: auto
 
-# Actuator:仅暴露健康检查/信息/优雅关闭,详细数据要求 IP 白名单
+# Actuator:健康检查/信息/优雅关闭/运行指标;除 health、info 外一律仅本机可访问(见 ActuatorSecurityConfig)
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,shutdown
+        include: health,info,shutdown,metrics
   endpoint:
     health:
       # 仅授权(本地 IP)请求才显示连接池/磁盘等详细信息,外部请求只能看到 UP/DOWN
