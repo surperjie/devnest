@@ -6,7 +6,11 @@
 
 <p align="center">
   <b>SSH 隧道 · 远程控制台 · 数据库 · Redis · 流水线</b><br/>
-  一体化桌面运维工作台
+  可快速扩展的 <b>开发工作台基站</b>
+</p>
+
+<p align="center">
+  <b>平台管治理，工具管业务 —— 新增一个工具模块，平台代码改动 = 0。</b>
 </p>
 
 <p align="center">
@@ -25,7 +29,8 @@
 
 ## 目录
 
-- [亮点](#亮点)
+- [定位](#定位)
+- [架构](#架构)
 - [功能模块](#功能模块)
 - [项目结构](#项目结构)
 - [技术栈](#技术栈)
@@ -37,16 +42,206 @@
 
 ---
 
-## 亮点
+## 定位
 
+DevNest 不是把若干功能堆在一起的工具箱，而是一个**开发工作台基站**：
+
+| 维度 | 含义 |
+|---|---|
+| **平台管治理** | 形态装配、资源登记、可观测、安全、隔离 —— 由平台统一提供。 |
+| **工具管业务** | 隧道、控制台、数据源、Redis、流水线 —— 各自独立模块，互不依赖。 |
+| **可快速扩展** | 新工具只需实现工具契约，**治理能力自动继承**，平台无需改动。 |
+
+### 扩展判据（机器可验，非口号）
+
+> **新增一个工具模块，平台改动行数 = 0；故意违反任一架构约束，CI 必须变红。**
+
+前半句是 S3 的验收标准，后半句由 P0 质量门禁保证。**判据必须能被机器验，不能靠人评审。**
+
+### 亮点
+
+- 🧬 **可扩展基站**：平台管治理、工具管业务，新工具零改动接入（终态 fitness function C11 断言）。
 - 🖥️ **桌面原生体验**：Tauri 2 + Vue 3，后端作为本地守护进程随 UI 启动/退出，零公网流量。
 - 🔌 **内网穿透**：SSH 隧道断线自动重连、心跳保活，让本地也能连上内网 MySQL / DM / Redis。
 - 🖲️ **Web 终端**：xterm.js 虚拟终端，WebSocket + 一次性 token 握手，保存常用 SSH 会话。
-- 🗄️ **数据库工作台**：库表树、分页预览、SQL 执行与历史记录，支持 MySQL / 达梦(DM)。
+- 🗄️ **数据库工作台**：库表树、分页预览、SQL 执行与历史记录，支持 MySQL / 达梦（DM）。
 - ⚡ **Redis 管理**：INFO / db / SCAN 键浏览、key 查看删除、命令白名单执行。
 - 🧩 **流水线编排**：多步骤脚本编排、本机进程执行、跨步骤结果传递、多标签运行。
-- 🛡️ **质量门禁内建**：JaCoCo 覆盖率、ArchUnit 架构约束、依赖收敛、maven-enforcer 模块边界。
+- 🛡️ **质量门禁内建**：JaCoCo 增量覆盖率、ArchUnit 架构约束、依赖收敛、OWASP 漏洞扫描。
 - 📦 **单文件分发**：`jlink` 裁剪出约 60MB 的 `jre21` 内嵌打包，安装后无需 JDK。
+
+---
+
+## 架构
+
+> 完整设计以 [目标架构 v2.0](docs/architecture/20260910_目标架构_v2.0.md) 为准；到达路径见 [架构演进路线](docs/architecture/20260910_架构演进路线.md) 与 [落地路线图](docs/architecture/20260910_目标架构落地路线图.md)。
+>
+> ⚠️ 本文档中标注为**现状**的图对应当前代码；标注为**终态**的图是设计蓝图，**尚未实现**。
+
+### 现状架构（S1 · 单机自用）
+
+单进程多模块，模块间**零横向依赖**，协作一律经 `core.spi` 接口；桌面壳以 sidecar 方式拉起后端。
+
+```mermaid
+flowchart TB
+    subgraph Shell["桌面壳 · Tauri 2"]
+        direction LR
+        UI["Vue 3 UI<br/>Element Plus / CodeMirror / xterm.js"]
+        RSH["Rust 壳<br/>窗口 + 后端进程生命周期"]
+    end
+
+    subgraph App["devnest-boot · Spring Boot 3 · 127.0.0.1:38080"]
+        direction TB
+        subgraph Biz["业务模块 · 彼此零横向依赖"]
+            direction LR
+            TN["devnest-tunnel<br/>SSH 隧道"]
+            CS["devnest-console<br/>远程控制台"]
+            DS["devnest-datasource<br/>数据源"]
+            RD["devnest-redis<br/>Redis"]
+            PL["devnest-pipeline<br/>流水线"]
+        end
+        CO["devnest-core<br/>BaseEntity · JPA · 缓存 · 线程池 · 连接池工厂 · SPI 契约"]
+        CM["devnest-common<br/>响应体 · 错误码 · CORS · 加密 · SQL 校验"]
+    end
+
+    H2[("H2 文件库<br/>配置库（本地）")]
+    SSH[("SSH 主机 / 跳板机")]
+    DB[("MySQL / 达梦")]
+    RDS[("Redis")]
+
+    RSH -->|"拉起 / 优雅关闭"| App
+    UI -->|"HTTP + WebSocket"| App
+    Biz --> CO
+    CO --> CM
+    TN --> SSH
+    CS --> SSH
+    DS --> DB
+    RD --> RDS
+    App --> H2
+```
+
+**编译期强制**：`maven-enforcer` 锁定依赖方向 `common ← core ← {tunnel, console, datasource, redis, pipeline} ← boot`，业务模块横向依赖直接构建失败。
+
+### 目标架构（S3 · 工具巢穴 · 终态）
+
+平台提供治理能力，工具提供业务能力。四层结构 + 防劣化防线，**新工具对平台零改动**。
+
+```mermaid
+flowchart TB
+    subgraph Access["① 接入层 · 同一份 jar，两种形态"]
+        direction LR
+        A1["桌面壳 Tauri<br/>devnest.mode=local"]
+        A2["浏览器<br/>devnest.mode=server"]
+    end
+
+    subgraph Gov["② 治理层 · 平台提供（新工具零改动继承）"]
+        direction LR
+        G1["形态装配<br/>形态元注解 + 条件化装配"]
+        G2["扩展点契约<br/>DevNestTool / ToolRegistry"]
+        G3["资源统一登记<br/>ResourceRegistry · 启动自检"]
+        G4["全维度可观测<br/>资源视图 / SLI / 健康 / trace"]
+        G5["安全纵深<br/>鉴权 · 审计 · 密钥轮换"]
+        G6["隔离与配额<br/>Bulkhead · 熔断 · 限流"]
+    end
+
+    subgraph Tool["③ 工具层 · 工具提供业务"]
+        direction LR
+        T1["SSH 隧道"]
+        T2["远程控制台"]
+        T3["数据源"]
+        T4["Redis"]
+        T5["流水线"]
+        T6["未来工具<br/>HTTP 调试 / AI 辅助"]
+    end
+
+    subgraph Gate["④ 防劣化 · 约束由机器执行"]
+        direction LR
+        Q1["maven-enforcer<br/>依赖边界 · 版本收敛"]
+        Q2["ArchUnit<br/>分层方向 · 形态语义 · 弃用标注"]
+        Q3["JaCoCo<br/>增量行覆盖 ≥ 80%"]
+        Q4["OWASP<br/>CVSS ≥ 7 即红"]
+    end
+
+    A1 --> Gov
+    A2 --> Gov
+    Gov -->|"治理能力自动继承"| Tool
+    Gate -.->|"违规即红"| Gov
+    Gate -.->|"违规即红"| Tool
+```
+
+**四根支柱**（互相支撑，不可偏科）：
+
+| 支柱 | 本质 | 检验刻度 |
+|---|---|---|
+| **工业化** | 交付可重复、质量可拦截 | CI 不跳过测试；覆盖率/漏洞/架构有阈值；发布可回滚 |
+| **可演进** | 变更成本不随时间上升 | 能安全地**加 / 改 / 删**：扩展点 + 契约版本 + 迁移范式 + ADR |
+| **可治理** | 看得见 **且** 管得住 | 资源总账 + 指标健康日志；鉴权、审计、配额隔离 |
+| **防劣化** | 违背约束时**机器拦截** | 约束 → 拦截矩阵全覆盖；每条约束都有负向验收用例 |
+
+### 双形态：一份 jar，两种装配
+
+形态由**启动参数**决定，不由代码分支决定。切换形态**不需要改任何业务代码**。
+
+```mermaid
+flowchart TB
+    JAR["同一份 devnest-boot.jar"]
+    JAR -->|"devnest.mode=local（默认）"| L
+    JAR -->|"devnest.mode=server"| S
+
+    subgraph L["LOCAL 形态 · 桌面壳"]
+        direction TB
+        L1["绑定 127.0.0.1"]
+        L2["单用户 · 无鉴权"]
+        L3["数据全量可见"]
+        L4["H2 文件库 · 零配置"]
+    end
+
+    subgraph S["SERVER 形态 · 浏览器"]
+        direction TB
+        S1["绑定内网网卡"]
+        S2["多用户 · 完整鉴权"]
+        S3["按 owner / visibility 过滤"]
+        S4["MySQL · 审计落库"]
+    end
+```
+
+> **不变量**：引入服务端能力**不得**要求本地登录或配置（本地形态可用性不被牺牲）；前提被打破时必须**显式失败**而非静默运行。
+
+### 演进路径与成熟度
+
+```mermaid
+flowchart LR
+    S1["S1 · 单机自用<br/>模块化 + 编译期边界"] -->|"形态稳定"| S2["S2 · 双形态<br/>装配层 + 身份层 + 状态归属"]
+    S2 -->|"出现第二个工具"| S3["S3 · 工具巢穴<br/>扩展点 + 治理层"]
+```
+
+| 成熟度 | 判据 | 状态 |
+|---|---|---|
+| **L1 可构建** | 一键构建 + 启动冒烟 | ✅ 已达成 |
+| **L2 可拦截** | 测试被强制执行，质量有阈值 | ✅ P0 已落地 |
+| **L3 可演进** | 契约与迁移受治理，变更可安全落地 | 📘 规划中（P4） |
+| **L4 可治理** | 全维度可观测 + 闭环防劣化，新工具零改动接入 | 📘 终态（P2/P3/P5） |
+
+**当前坐标**：`S1 单机形态 / L2 可拦截 / P0 已完成`。执行计划见 [落地路线图](docs/architecture/20260910_目标架构落地路线图.md)（P0 → P1 装配形态 → P2 治理纵深 → P3 安全隔离 → P4 演进纪律 → P5 扩展点闭环）。
+
+### 约束 → 拦截矩阵
+
+**没有执行者的约束不是约束，是愿望。** 每条架构约束都有唯一的机器执行者：
+
+| 约束 | 拦截手段 | 时机 |
+|---|---|---|
+| 业务模块间零横向依赖 | `maven-enforcer` `bannedDependencies` | 构建 validate |
+| 依赖版本收敛 | `maven-enforcer` `dependencyConvergence` | 构建 validate |
+| 无已知高危依赖 | OWASP `dependency-check`（CVSS ≥ 7 即红） | CI |
+| 分层依赖方向正确 | ArchUnit（`core` 不得依赖任何实现包） | CI |
+| 新增运行时资源必须登记 | `ResourceRegistry` 启动自检 + 测试基座 | 启动 + CI |
+| SERVER 形态不得装配本地实现 | `ServerModeConsistencyCheck`（启动即失败） | 启动 |
+| 覆盖率不下降 | JaCoCo **增量行覆盖** ≥ 80% | CI |
+| 新增代码行必须有测试 | 增量覆盖率门禁（只卡变更行） | CI |
+| 形态语义不得散落业务代码 | ArchUnit：禁用裸 `@ConditionalOnProperty` | CI |
+| 弃用标注完整 | ArchUnit：`@Deprecated` 必须带 `since` | CI |
+
+> 完整矩阵（C1–C13 + 8 条负向验收用例 N1–N8）见 [目标架构 v2.0 §5](docs/architecture/20260910_目标架构_v2.0.md)。
 
 ---
 
@@ -86,7 +281,7 @@ devnest/
 ├── docs/                            # 需求、架构、接口文档
 │   ├── API.md                       #   后端 HTTP / WebSocket 接口文档
 │   ├── README.md                    #   文档目录与索引
-│   ├── architecture/                #   架构文档、路线图、能力清单
+│   ├── architecture/                #   架构文档、能力清单、演进路线、目标架构、落地路线图
 │   └── requirements/                #   需求规格说明
 ├── build-app.ps1                    # 本地一键打包（可选 -SkipBackend）
 └── .github/workflows/build-app.yml  # CI 打包（与本地脚本同一套 jlink 逻辑）
@@ -107,7 +302,7 @@ devnest/
 - **JPA / Hibernate** + **Flyway** 数据库迁移
 - **H2**（开发，`MODE=MySQL`）/ **MySQL**（生产）
 - **JSch**（SSH）· **Jedis**（Redis）· **Caffeine** · **Resilience4j**
-- **JaCoCo** · **ArchUnit** · **maven-enforcer** · **OWASP dependency-check**
+- **JaCoCo** · **ArchUnit** · **maven-enforcer** · **OWASP dependency-check** · **Testcontainers**
 
 ### 前端
 
@@ -152,6 +347,19 @@ npm run tauri:dev
 
 - dev server 端口 `1420`，后端 CORS 已放行 `127.0.0.1:1420` / `localhost:1420` / `tauri://localhost` / `http://tauri.localhost`。
 - 前端 axios 直连 `http://127.0.0.1:38080/api`（见 `src/api/http.js`）。
+
+### 质量门禁
+
+后端构建跑 `mvn verify`（而非 `package -DskipTests`），四道门禁：
+
+| 门禁 | 工具 | 阈值 |
+|---|---|---|
+| 单元 / 集成测试 | Surefire + Failsafe + Testcontainers | 失败即红 |
+| 覆盖率 | JaCoCo | **增量行覆盖 ≥ 80%** |
+| 依赖收敛与漏洞 | enforcer + OWASP | CVSS ≥ 7 即红 |
+| 架构约束 | ArchUnit | 违规即红 |
+
+增量覆盖率门禁由 `scripts/check-incremental-coverage.ps1` 执行，本地与 CI 共用同一份实现。
 
 ---
 
@@ -235,12 +443,19 @@ chcp 65001
 
 ## 文档
 
+文档按"回答什么问题"分四层，**每层有唯一权威文档**：
+
+| 层 | 回答的问题 | 权威文档 |
+|---|---|---|
+| **L0 需求** | 要做什么 | [docs/requirements/需求.md](docs/requirements/需求.md) |
+| **L1 现状** | 现在是什么样 | [架构文档](docs/architecture/20260910_架构文档.md)（机制） / [能力清单](docs/architecture/20260910_当前实现能力清单.md)（可用性） |
+| **L2 演进** | 怎么走 | [架构演进路线](docs/architecture/20260910_架构演进路线.md) / [落地路线图](docs/architecture/20260910_目标架构落地路线图.md) |
+| **L3 目标** | 要去哪 | [目标架构 v2.0](docs/architecture/20260910_目标架构_v2.0.md) |
+
 | 文档 | 说明 |
 |---|---|
 | [docs/API.md](docs/API.md) | 后端 HTTP / WebSocket 接口文档 |
-| [docs/README.md](docs/README.md) | 文档目录与索引 |
-| [docs/architecture/](docs/architecture/) | 架构文档、当前能力清单、演进路线、落地路线图 |
-| [docs/requirements/](docs/requirements/) | 需求规格说明 |
+| [docs/README.md](docs/README.md) | 文档目录与完整索引 |
 
 ---
 
