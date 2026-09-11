@@ -24,6 +24,22 @@
     本脚本是纯 PowerShell 实现,不依赖 Python/diff-cover:门禁本身必须能在本地
     和 CI 上被反复验证,否则"门禁是否真的在拦"就无法回答(路线图风险 R1「自指漏洞」)。
 
+    基线过远保护:
+      基线取 CI 的 github.event.before,正常情形它就是"上一次推送前的分支顶端",
+      增量 = 本次推送真正引入的改动。但当基线离 HEAD 过远时 —— 典型场景是把
+      长期分支【快进合并】进 main,此时 before 还停在几十个提交之前 —— "本次改动"
+      会退化成"整个分支历史",增量门禁随之退化成【存量全量门禁】。
+
+      实测该退化情形的结果是 22.6% 增量覆盖(存量本来就只有 ~22%),必然长期为红,
+      正是路线图 R2 警告的"永远为红的门禁等于没有门禁"。因此脚本在判定前先检查
+      基线是否过远(MaxBaselineCommits / MaxBaselineFiles),命中则回退到 HEAD~1
+      并显式打印 notice:回退是【被宣布的降级】,既不静默放行,也不让门禁永久为红。
+
+    未被判定的文件必须可见:
+      若某模块本次没有产出覆盖率报告(典型原因:该模块一个测试都没有),该模块下
+      的改动文件会被跳过。脚本会把"有多少个文件、分别是哪个模块"显式打印出来 ——
+      否则"门禁对这批改动没有任何约束力"这件事就是静默的,又是一个自指漏洞。
+
 .PARAMETER BaseRef
     比较基线(git ref / commit sha)。例如 origin/dev、HEAD~1、或 CI 传入的
     github.event.before。
@@ -36,6 +52,16 @@
 
 .PARAMETER Threshold
     增量行覆盖率下限,0.80 表示 80%。与 backend/pom.xml 的 jacoco.incremental.floor 保持一致。
+
+.PARAMETER MaxBaselineCommits
+    基线过远判定(提交维度):BaseRef..HEAD 之间的提交数超过该值即认为基线过远。
+    常规推送是 1~3 个提交;一次分支晋升是几十个,两者区分度很高。
+    设为 0 表示关闭该项判定。
+
+.PARAMETER MaxBaselineFiles
+    基线过远判定(文件维度):backend 下改动的文件数超过该值即认为基线过远。
+    用于兜住"提交数不多、但一次改了几百个文件"(整体格式化 / 批量搬迁)的情形。
+    与 MaxBaselineCommits 是【或】关系,任一命中即回退。设为 0 表示关闭该项判定。
 
 .PARAMETER ShowDetail
     打印每个文件的逐行统计,便于本地排查。
@@ -62,6 +88,10 @@ param(
     [string]$BaseRef,
 
     [double]$Threshold = 0.80,
+
+    [int]$MaxBaselineCommits = 15,
+
+    [int]$MaxBaselineFiles = 60,
 
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
 
@@ -188,6 +218,62 @@ function Get-UntrackedFiles {
 }
 
 # ---------------------------------------------------------------------------
+# 1c. 基线过远保护:把【分支晋升】与【增量提交】区分开
+# ---------------------------------------------------------------------------
+function Resolve-EffectiveBase {
+    param(
+        [string]$Base,
+        [string]$Root,
+        [string]$SubPath,
+        [int]$MaxCommits,
+        [int]$MaxFiles
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    Push-Location $Root
+    try {
+        $ErrorActionPreference = 'Continue'
+
+        $rawCount = & git rev-list --count "$Base..HEAD" 2>$null
+        $commitCount = if ($LASTEXITCODE -eq 0 -and $rawCount) { [int]$rawCount } else { -1 }
+
+        $rawFiles = @(& git diff --name-only --diff-filter=ACMR --no-color "$Base" -- $SubPath 2>$null)
+        $fileCount = if ($LASTEXITCODE -eq 0) {
+            @($rawFiles | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        }
+        else { -1 }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+        Pop-Location
+    }
+
+    # 取不到就不擅自回退:让后面的 git diff 去暴露真实错误(例如 ref 不存在)。
+    if ($commitCount -lt 0 -or $fileCount -lt 0) {
+        return [pscustomobject]@{
+            Base = $Base; Fallback = $false; Reason = ''; Commits = -1; Files = -1
+        }
+    }
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if ($MaxCommits -gt 0 -and $commitCount -gt $MaxCommits) {
+        $reasons.Add("提交跨度 $commitCount 个 > 上限 $MaxCommits")
+    }
+    if ($MaxFiles -gt 0 -and $fileCount -gt $MaxFiles) {
+        $reasons.Add("$SubPath 下改动文件 $fileCount 个 > 上限 $MaxFiles")
+    }
+
+    $tripped = $reasons.Count -gt 0
+    return [pscustomobject]@{
+        Base     = $(if ($tripped) { 'HEAD~1' } else { $Base })
+        Fallback = $tripped
+        Reason   = ($reasons -join '; ')
+        Commits  = $commitCount
+        Files    = $fileCount
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 2. 读 JaCoCo XML,得到 每个源文件 -> (行号 -> 是否被覆盖)
 # ---------------------------------------------------------------------------
 function Get-CoverageBySourceFile {
@@ -255,7 +341,25 @@ Write-Host "基线(BaseRef)   : $BaseRef"
 Write-Host "阈值(Threshold): $([math]::Round($Threshold * 100, 1))%"
 Write-Host "仓库根          : $RepoRoot"
 
-$changed = Get-ChangedLinesByFile -Base $BaseRef -Root $RepoRoot -SubPath $ModulesRelativePath
+# 基线过远保护:见 Resolve-EffectiveBase 的注释。
+$effective = Resolve-EffectiveBase -Base $BaseRef -Root $RepoRoot -SubPath $ModulesRelativePath `
+    -MaxCommits $MaxBaselineCommits -MaxFiles $MaxBaselineFiles
+
+# 门禁的输入必须能被回答:$BaseRef 到底圈住了多大范围,要一直可见。
+if ($effective.Commits -ge 0) {
+    Write-Host "基线范围        : $($effective.Commits) 个提交, $ModulesRelativePath 下改动文件 $($effective.Files) 个" `
+        -ForegroundColor DarkGray
+}
+
+if ($effective.Fallback) {
+    Write-Host ''
+    Write-Host '基线过远,已回退到 HEAD~1 —— 本次按"增量提交"判定,而不是"整个分支历史"。' -ForegroundColor Yellow
+    Write-Host "  原因    : $($effective.Reason)" -ForegroundColor Yellow
+    Write-Host "  实际基线: $($effective.Base)" -ForegroundColor Yellow
+    Write-Host "::notice title=增量覆盖率基线已回退::BaseRef=$BaseRef 距离 HEAD 过远($($effective.Reason)); 已改用 HEAD~1 判定,避免增量门禁退化成存量全量门禁。"
+}
+
+$changed = Get-ChangedLinesByFile -Base $effective.Base -Root $RepoRoot -SubPath $ModulesRelativePath
 $untrackedFiles = @(Get-UntrackedFiles -Root $RepoRoot -SubPath $ModulesRelativePath)
 
 # 判定对象 = diff 得到的"改动行" + 未跟踪的新文件(值为 $null 表示"整个文件都是新增")。
@@ -275,6 +379,7 @@ $javaPathPattern = '^' + [regex]::Escape($ModulesRelativePath) +
                    '/(?<module>[^/]+)/src/main/java/(?<package>.+)/(?<file>[^/]+\.java)$'
 
 $coverageCache = @{}
+$notJudgedByModule = @{}
 $perFile = New-Object System.Collections.Generic.List[object]
 $totalCovered = 0
 $totalExecutable = 0
@@ -295,9 +400,17 @@ foreach ($file in $targets.Keys) {
     $table = $coverageCache[$module]
     $key = "$package/$fileName"
     if (-not $table.ContainsKey($key)) {
-        # 该文件没有进入覆盖率报告(可能该模块本次没跑测试,或被排除)
+        # 该文件没有进入覆盖率报告(可能该模块本次没跑测试,或被排除)。
+        # 这里必须先记账,最后统一打印出来:否则"门禁对这批改动没有约束力"
+        # 就变成静默事实 —— 加一堆无测试模块下的代码,门禁照样绿。
         if ($ShowDetail) {
             Write-Host "  [skip] $file —— 覆盖率报告中无此类(非可执行或模块未跑测试)" -ForegroundColor DarkGray
+        }
+        if ($notJudgedByModule.ContainsKey($module)) {
+            $notJudgedByModule[$module] = $notJudgedByModule[$module] + 1
+        }
+        else {
+            $notJudgedByModule[$module] = 1
         }
         continue
     }
@@ -337,6 +450,20 @@ foreach ($file in $targets.Keys) {
 }
 
 Write-Header '统计结果'
+
+# 未被判定的文件必须显式可见:门禁对它们没有约束力,这不能是个静默的事实。
+$notJudgedTotal = 0
+foreach ($moduleName in $notJudgedByModule.Keys) { $notJudgedTotal += $notJudgedByModule[$moduleName] }
+
+if ($notJudgedTotal -gt 0) {
+    Write-Host ''
+    Write-Host "注意:有 $notJudgedTotal 个改动文件未纳入判定 —— 其所在模块本次没有产出覆盖率报告" -ForegroundColor Yellow
+    Write-Host '(通常是该模块没有任何测试,JaCoCo 无执行数据可分析;也可能是该文件不含可执行行。)' -ForegroundColor Yellow
+    foreach ($moduleName in ($notJudgedByModule.Keys | Sort-Object)) {
+        Write-Host ("  {0}: {1} 个" -f $moduleName, $notJudgedByModule[$moduleName]) -ForegroundColor DarkGray
+    }
+    Write-Host '这些改动既不加分也不扣分 —— 门禁对它们没有约束力。' -ForegroundColor Yellow
+}
 
 if ($totalExecutable -eq 0) {
     Write-Host '本次改动没有触及任何可执行的代码行(仅注释/空行/import/测试代码或纯配置),' -ForegroundColor Yellow
