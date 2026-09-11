@@ -47,6 +47,7 @@
 | [architecture/数据模型.md](architecture/数据模型.md) | 数据模型设计 | ⚠️ 以 Flyway 脚本为准 |
 | [architecture/database-init.sql](architecture/database-init.sql) | 数据库初始化脚本 | — |
 | [requirements/需求.md](requirements/需求.md) | 需求规格说明 | 描述 S1 形态,与实现有差异 |
+| [wiki/](wiki/) | **Wiki 源文件** —— 首页、快速开始、项目结构、质量门禁、CI 与发布、文档地图、常见问题、贡献指南 | 📗 入口与操作手册,发布到 GitHub Wiki |
 
 ## 权威性约定
 
@@ -61,6 +62,7 @@
 | 执行计划、阶段顺序与门禁 | `20260910_目标架构落地路线图.md` |
 | 数据表结构 | Flyway 脚本(`backend/devnest-boot/src/main/resources/db/migration`) |
 | 接口行为 | 实际代码 |
+| 怎么跑、怎么排障 | `wiki/`(发布后的 GitHub Wiki) —— 只做导航与操作,不重述设计结论 |
 
 ## 重要说明
 
@@ -94,3 +96,13 @@ v1.0 设计稿中描述的 `ToolModule` SPI、`ResourceRegistry`、`ShutdownHook
 新增文档请使用统一的命名规则: `YYYYMMDD_主题.md`
 
 **新增任何架构文档后,必须同步更新本索引,并明确它在四层体系中的位置与权威性。**
+
+## Wiki
+
+`wiki/` 是 GitHub Wiki 的**页面源文件**。Wiki 的定位是**入口与操作手册**,不承担权威性:
+它只做导航与操作步骤,**不复制本目录下文档的设计结论** —— 否则等于同一个问题给出两个答案。
+
+- 改 Wiki = 改 `wiki/*.md` 并提 PR(走正常评审,可回溯、可回滚)
+- 发布 = `.\scripts\sync-wiki.ps1`(镜像 `.md` 页面到 GitHub Wiki,孤儿页会被删除)
+- **不要直接在 GitHub 网页上编辑 Wiki 页面** —— 下次发布会把它覆盖掉
+- 首次发布前,需在仓库 Settings 启用 Wikis 并手工创建第一个页面(GitHub 才会生成 `.wiki.git` 仓库)

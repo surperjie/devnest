@@ -282,9 +282,10 @@ devnest/
 │   ├── API.md                       #   后端 HTTP / WebSocket 接口文档
 │   ├── README.md                    #   文档目录与索引
 │   ├── architecture/                #   架构文档、能力清单、演进路线、目标架构、落地路线图
-│   └── requirements/                #   需求规格说明
+│   ├── requirements/                #   需求规格说明
+│   └── wiki/                        #   GitHub Wiki 页面源文件（scripts/sync-wiki.ps1 发布）
 ├── build-app.ps1                    # 本地一键打包（可选 -SkipBackend）
-└── .github/workflows/build-app.yml  # CI 打包（与本地脚本同一套 jlink 逻辑）
+└── .github/workflows/build-app.yml  # CI：日常 push 只跑门禁，v* 标签 / 手动触发才打包
 ```
 
 ---
@@ -391,10 +392,20 @@ npm run tauri:dev
 
 ### CI
 
-推送后由 `.github/workflows/build-app.yml` 执行同一套流程并产出安装包：
+`.github/workflows/build-app.yml` 把「门禁」和「打包」拆开，**日常提交只跑门禁，不产安装包**：
+
+| 触发 | 执行 | 产物 |
+|---|---|---|
+| push 到 `main` / `dev`（命中 `paths`） | `quality-gate` | 无安装包（仅归档测试 / 覆盖率报告） |
+| push `v*` 标签 | `quality-gate` + `build` | NSIS exe / MSI |
+| 手动 `Run workflow`（勾选 `build_app`） | `quality-gate` + `build` | NSIS exe / MSI |
 
 - `quality-gate`（Ubuntu）：`mvn verify` + JaCoCo + ArchUnit + Testcontainers + 增量覆盖率门禁 + OWASP 漏洞门禁（需 `NVD_API_KEY`，缺失时显式标注“未执行”）。
 - `build`（Windows）：依赖 `quality-gate`，只做 Windows 打包（Tauri / jlink）。
+
+> 安装包是**发布产物**，不是每次提交的副产物 —— 一次 Windows 打包要 10~20 分钟，而绝大多数提交并不改变发行版内容。需要安装包时推一个 `v*` 标签，或手动勾选 `build_app`。
+>
+> GitHub 的 `paths` 过滤对 tag 推送**不生效**（官方语义：*Path filters are not evaluated for pushes of tags*），因此标签发版不会被 `paths` 漏掉。日常 push 的门禁一刻没松：测试 / 覆盖率 / 架构 / 漏洞仍然每次都有执行者。
 
 ### JRE 生成（`scripts/build-jre.ps1`）
 
@@ -456,6 +467,7 @@ chcp 65001
 |---|---|
 | [docs/API.md](docs/API.md) | 后端 HTTP / WebSocket 接口文档 |
 | [docs/README.md](docs/README.md) | 文档目录与完整索引 |
+| [Wiki](https://github.com/surperjie/devnest/wiki) | 入门导航 / 操作手册（快速开始、质量门禁、CI 与发布、FAQ）；权威内容仍以本仓库 `docs/` 为准 |
 
 ---
 
