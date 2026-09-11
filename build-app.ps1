@@ -32,10 +32,38 @@ if (-not (Test-Path $JavaHome)) {
     Write-Error "JAVA_HOME not found: $JavaHome`nUse -JavaHome to specify correct JDK 21 path"
     exit 1
 }
+
+$JavaExe = Join-Path $JavaHome "bin\java.exe"
+if (-not (Test-Path $JavaExe)) {
+    Write-Error "Not a JDK home (bin\java.exe missing): $JavaHome`nA plain JRE is not enough - step 4 below needs jlink."
+    exit 1
+}
+
+# Fail fast on the JDK version. A too-low JDK does not fail here; it fails much
+# later inside "mvn verify" with a misleading bytecode error such as
+#   "class file version 65.0 ... only recognizes class file versions up to 52.0"
+# "1.8.0_341" -> major 8, "21.0.7" -> major 21.
+$javaVersionText = (& $JavaExe -version 2>&1 | ForEach-Object { "$_" }) -join "`n"
+$javaVersionMatch = [regex]::Match($javaVersionText, 'version\s+"(?<v>[^"]+)"')
+if (-not $javaVersionMatch.Success) {
+    Write-Error "Cannot parse the JDK version from: $JavaExe`n$javaVersionText"
+    exit 1
+}
+$javaRawVersion = $javaVersionMatch.Groups['v'].Value
+$javaMajor = [int]([regex]::Match($javaRawVersion, '^(?:1\.)?(?<m>\d+)').Groups['m'].Value)
+
 $env:JAVA_HOME = $JavaHome
 $env:Path = "$JavaHome\bin;$env:Path"
 Write-Host "  JAVA_HOME = $JavaHome"
-java -version
+Write-Host "  JDK version = $javaRawVersion (major $javaMajor)"
+
+if ($javaMajor -lt 21) {
+    Write-Error "JDK 21+ required, but $JavaHome is JDK $javaMajor ($javaRawVersion).`nPoint -JavaHome at a JDK 21 installation, otherwise 'mvn verify' fails with a confusing bytecode-version error."
+    exit 1
+}
+if ($javaMajor -ne 21) {
+    Write-Warning "JDK $javaMajor detected, but this project targets JDK 21. The bundled JRE (jlink) will be built from JDK $javaMajor."
+}
 
 # 2. Build backend
 if ($SkipBackend) {

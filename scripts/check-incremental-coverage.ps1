@@ -16,7 +16,10 @@
       - 只看本次改动【新增或修改】的行(来自 `git diff -U0`),删除行不计入分母;
       - 只看【可执行】的行(JaCoCo XML 里出现 <line> 元素的行);
         改注释、改空行、改 import 不会拉低覆盖率,也就不会误伤;
-      - 只统计 src/main/java 下的代码,测试代码本身不计入。
+      - 只统计 src/main/java 下的代码,测试代码本身不计入;
+      - 新增但尚未 `git add` 的文件整体纳入判定(经 `git ls-files --others`
+        单独补齐)。否则本地"先跑门禁再提交"这一最该生效的场景里,
+        新文件根本不在 git diff 中,会被当成"无判定对象"静默放行。
 
     本脚本是纯 PowerShell 实现,不依赖 Python/diff-cover:门禁本身必须能在本地
     和 CI 上被反复验证,否则"门禁是否真的在拦"就无法回答(路线图风险 R1「自指漏洞」)。
@@ -27,6 +30,9 @@
 
     比较对象是【工作区】(不是 HEAD 提交):CI 上工作区 == HEAD,行为一致;
     本地则可以在 commit 之前先跑一遍,把问题挡在提交前。
+
+    注意:git diff 看不见"未跟踪"的新文件,脚本会另外用 git ls-files --others
+    把它们整体当作新增行纳入判定,因此本地没 add 的文件也不会被漏判。
 
 .PARAMETER Threshold
     增量行覆盖率下限,0.80 表示 80%。与 backend/pom.xml 的 jacoco.incremental.floor 保持一致。
@@ -146,6 +152,42 @@ function Get-ChangedLinesByFile {
 }
 
 # ---------------------------------------------------------------------------
+# 1b. 取"未跟踪"的新文件(git diff 看不见它们)
+# ---------------------------------------------------------------------------
+function Get-UntrackedFiles {
+    param(
+        [string]$Root,
+        [string]$SubPath
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    Push-Location $Root
+    try {
+        # --others --exclude-standard:未跟踪、且不被 .gitignore 忽略的文件。
+        # 输出是仓库根相对路径(正斜杠),与 git diff 的 "+++ b/..." 口径一致,
+        # 也与下面的 $javaPathPattern 对得上。
+        #
+        # 为什么必须单独取一次:git diff 只比较"已被跟踪"的文件。本地新增了
+        # src/main/java 下的文件但还没 git add 时,该文件不在 diff 里,门禁会
+        # 返回"无判定对象 -> 通过" —— 恰好把"提交前先跑一遍"这个最该生效的
+        # 场景漏掉,是典型的自指漏洞。
+        $ErrorActionPreference = 'Continue'
+        $untracked = & git ls-files --others --exclude-standard -- $SubPath 2>$null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+        Pop-Location
+    }
+
+    if ($exitCode -ne 0) {
+        throw "git ls-files 失败。请确认 $Root 是 git 仓库。"
+    }
+
+    return @($untracked | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+# ---------------------------------------------------------------------------
 # 2. 读 JaCoCo XML,得到 每个源文件 -> (行号 -> 是否被覆盖)
 # ---------------------------------------------------------------------------
 function Get-CoverageBySourceFile {
@@ -214,6 +256,19 @@ Write-Host "阈值(Threshold): $([math]::Round($Threshold * 100, 1))%"
 Write-Host "仓库根          : $RepoRoot"
 
 $changed = Get-ChangedLinesByFile -Base $BaseRef -Root $RepoRoot -SubPath $ModulesRelativePath
+$untrackedFiles = @(Get-UntrackedFiles -Root $RepoRoot -SubPath $ModulesRelativePath)
+
+# 判定对象 = diff 得到的"改动行" + 未跟踪的新文件(值为 $null 表示"整个文件都是新增")。
+$targets = @{}
+foreach ($file in $changed.Keys) { $targets[$file] = $changed[$file] }
+foreach ($file in $untrackedFiles) {
+    if (-not $targets.ContainsKey($file)) { $targets[$file] = $null }
+}
+
+if ($ShowDetail -and $untrackedFiles.Count -gt 0) {
+    Write-Host "未跟踪(尚未 git add)的文件 $($untrackedFiles.Count) 个,已整体纳入判定:" -ForegroundColor DarkGray
+    foreach ($file in $untrackedFiles) { Write-Host "  [new] $file" -ForegroundColor DarkGray }
+}
 
 # backend/<module>/src/main/java/<package...>/<File>.java
 $javaPathPattern = '^' + [regex]::Escape($ModulesRelativePath) +
@@ -224,7 +279,7 @@ $perFile = New-Object System.Collections.Generic.List[object]
 $totalCovered = 0
 $totalExecutable = 0
 
-foreach ($file in $changed.Keys) {
+foreach ($file in $targets.Keys) {
     $match = [regex]::Match($file, $javaPathPattern)
     if (-not $match.Success) { continue }
 
@@ -252,7 +307,11 @@ foreach ($file in $changed.Keys) {
     $executable = 0
     $uncoveredLines = New-Object System.Collections.Generic.List[int]
 
-    foreach ($lineNumber in ($changed[$file] | Sort-Object -Unique)) {
+    # $null 表示"整个文件都是新增":候选行直接取 JaCoCo 报告里该文件的全部行,
+    # 既不依赖读文件行数,也不会因为工作区内容与报告不同步而错位。
+    $candidateLines = if ($null -eq $targets[$file]) { @($lineStates.Keys) } else { @($targets[$file]) }
+
+    foreach ($lineNumber in ($candidateLines | Sort-Object -Unique)) {
         if (-not $lineStates.ContainsKey($lineNumber)) { continue }  # 非可执行行(注释/空行)不计
         $executable++
         if ($lineStates[$lineNumber]) {
