@@ -179,10 +179,12 @@ if ($probe.ExitCode -ne 0) {
         $ownerName = $info.Groups['owner'].Value
         $repoName = $info.Groups['repo'].Value
         @"
-  1) 启用 Wiki:https://$wikiHost/$ownerName/$repoName/settings
-     —— 在 Settings -> Features 里勾选 Wikis
-  2) 创建首页:https://$wikiHost/$ownerName/$repoName/wiki
-     —— 点 Create the first page,随便填个标题保存即可(内容随后会被本脚本覆盖)
+  1) 创建首页:https://$wikiHost/$ownerName/$repoName/wiki
+     —— 点 Create the first page,标题填 Home,保存即可(内容随后会被本脚本覆盖)
+     Wiki 仓库是【懒创建】的:一个页面都没有时,GitHub 根本不会建 .wiki.git,
+     所以这一步只能走网页 —— REST API 没有任何创建 wiki 页面的端点。
+  2) 若上一步找不到入口,再确认 Wiki 功能是开的:https://$wikiHost/$ownerName/$repoName/settings
+     —— Settings -> Features -> 勾选 Wikis(新建仓库默认就是开的)
 
 完成后重新运行本脚本即可。
 "@
