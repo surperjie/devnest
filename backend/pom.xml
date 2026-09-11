@@ -58,6 +58,26 @@
 
         <!-- 模块边界强制:maven-enforcer-plugin 显式锁版本,不依赖 Spring Boot BOM 是否代为管理 -->
         <maven-enforcer-plugin.version>3.4.1</maven-enforcer-plugin.version>
+
+        <!-- ===== P0 质量门禁:版本显式声明,不依赖父 POM 是否代为管理 ===== -->
+        <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
+        <archunit.version>1.2.1</archunit.version>
+        <owasp-dependency-check.version>12.1.0</owasp-dependency-check.version>
+
+        <!-- 存量覆盖率地板(棘轮语义):只允许上调,不得下调.
+             默认 0.00 = 该模块暂不设存量门禁(当前无测试的模块必然为 0,
+             直接卡 60% 会让构建永久为红 → 见路线图 R2).
+             有测试的模块在自己的 <properties> 里覆盖此值,取"实测值向下取整",
+             使其成为"不许倒退"的地板;随测试补齐逐阶段向 60% 抬升. -->
+        <jacoco.line.floor>0.00</jacoco.line.floor>
+
+        <!-- 增量行覆盖门禁:只卡本次变更行,由 scripts/check-incremental-coverage.ps1 执行
+             (本地/CI 同一份实现,见 .github/workflows/build-app.yml)。
+             此处的属性是该脚本阈值的"单一事实来源",供 CI 与文档对齐 -->
+        <jacoco.incremental.floor>0.80</jacoco.incremental.floor>
+
+        <!-- 漏洞门禁:CVSS 达到该分数即构建失败 -->
+        <owasp.fail-cvss>7</owasp.fail-cvss>
     </properties>
 
     <!-- 依赖版本锁定:子模块声明 <dependency> 时一律不用 <version> -->
@@ -186,6 +206,58 @@
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
+
+            <!-- ============================================================
+                 覆盖率门禁(P0 task 0.2)
+                 prepare-agent:surefire 起 JVM 前注入探针,产出 target/jacoco.exec
+                 report       :产出 HTML/XML/CSV 报告(存量覆盖率 = 观测指标)
+                 check        :按 ${jacoco.line.floor} 卡下限(棘轮,只升不降)
+
+                 注意:未跑测试的模块不会产生 jacoco.exec,report/check 会自动
+                 跳过并打印 "Skipping JaCoCo execution due to missing execution
+                 data file" —— 这是 JaCoCo 的既定行为,不是静默降级.
+                 ============================================================ -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco-maven-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <rules>
+                        <rule>
+                            <element>BUNDLE</element>
+                            <limits>
+                                <limit>
+                                    <counter>LINE</counter>
+                                    <value>COVEREDRATIO</value>
+                                    <minimum>${jacoco.line.floor}</minimum>
+                                </limit>
+                            </limits>
+                        </rule>
+                    </rules>
+                </configuration>
+            </plugin>
         </plugins>
         <pluginManagement>
             <plugins>
@@ -205,6 +277,15 @@
                             </goals>
                         </execution>
                     </executions>
+                    <!-- 这里声明的规则对【所有子模块】生效(与子模块自己的 bannedDependencies 合并).
+                         子模块只写各自差异化的依赖禁令,通用规则集中在此,避免 8 处重复. -->
+                    <configuration>
+                        <rules>
+                            <!-- P0 task 0.3:同一个 artifact 在依赖树中出现多个版本即失败.
+                                 目的:防止依赖被两条路径带进不同版本,导致运行期行为不确定 -->
+                            <dependencyConvergence/>
+                        </rules>
+                    </configuration>
                 </plugin>
 
                 <plugin>
@@ -222,4 +303,81 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <!-- ============================================================
+         Profile: security-scan(P0 task 0.4 · 漏洞门禁)
+
+         为什么是 profile 而不是无条件绑进 verify:
+         OWASP dependency-check 每次运行都要先联网同步 NVD 漏洞库(首次数百 MB),
+         把它焊死在 verify 上,本地每跑一次单测都要先等几分钟联网 —— 这种"看起来
+         很严格"的门禁,结局必然是所有人习惯性地加 -Ddependency-check.skip=true,
+         等于没有门禁(路线图风险 R2)。
+
+         因此:本地默认不跑,CI 用 `-Psecurity-scan` 显式开启(见
+         .github/workflows/build-app.yml)。
+
+         为什么放在根 pom 而不是某个子模块:
+         依赖漏洞是"整个依赖树"的属性。放在父 POM 会被所有子模块继承,每个模块
+         各扫各的依赖树 —— 任何一处引入高危版本都会让构建在"引入它的那个模块"上
+         变红,不会因为"恰好没人扫"而漏掉。
+
+         ── 关于 NVD_API_KEY(实测结论,不是猜测)──────────────
+         NVD 的 CVE 2.0 接口自 2023 年起对无凭据访问限速,实测在受限网络下直接
+         返回 403;9.x 起插件已移除旧的 nvdDatafeed 批量源,只能走 API。三条路
+         实测结果:
+           · 9.0.9 + 无 key              -> 403,更新失败
+           · 9.0.9 + nvdDatafeed        -> 参数已不存在(unknown parameter)
+           · 8.4.3 + nvdDatafeed        -> 仍回落已下线的 1.1 源,403
+         所以这条门禁的运行前提就是 NVD_API_KEY,没有"免 Key 的替代方案"。
+
+         注意:更新失败会让构建失败(不是只告警)。这是一件好事 —— 它保证了
+         门禁不会在"没扫成"的情况下假装绿色。既然结果是二元的,前提条件就必须
+         被显式对待:CI 里该步骤在 NVD_API_KEY 缺失时会打印 warning 并在日志里
+         明确写出"门禁未执行",而不是静默通过。
+
+         阈值只由 ${owasp.fail-cvss} 决定(默认 7),要收紧/放宽请改这个属性。
+         ============================================================ -->
+    <profiles>
+        <profile>
+            <id>security-scan</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.owasp</groupId>
+                        <artifactId>dependency-check-maven</artifactId>
+                        <version>${owasp-dependency-check.version}</version>
+                        <configuration>
+                            <failBuildOnCVSS>${owasp.fail-cvss}</failBuildOnCVSS>
+                            <formats>
+                                <format>HTML</format>
+                                <format>JSON</format>
+                            </formats>
+                            <!-- NVD 的 CVE 2.0 接口自 2023 年起对无凭据访问限速,
+                                 实测无 key 时直接 403,更新失败即构建失败(三条实测
+                                 结论见下方 profile 注释)。
+                                 key 从环境变量注入,不写进仓库;本地要跑这个 profile
+                                 请先设好 NVD_API_KEY,否则这次扫描必然红。 -->
+                            <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
+                            <!-- 本工程只有 Java。关掉 .NET / JS / Node 三类分析器:
+                                 既省一轮无谓扫描,也少掉三个外部数据源(RetireJS
+                                 的 jsrepository.json 托管在 raw.githubusercontent.com,
+                                 在受限网络里会让整次扫描直接失败)。 -->
+                            <assemblyAnalyzerEnabled>false</assemblyAnalyzerEnabled>
+                            <retireJsAnalyzerEnabled>false</retireJsAnalyzerEnabled>
+                            <nodeAnalyzerEnabled>false</nodeAnalyzerEnabled>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>owasp-dependency-check</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

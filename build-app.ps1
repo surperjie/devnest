@@ -41,11 +41,15 @@ java -version
 if ($SkipBackend) {
     Write-Host "`n[2/5] Skipping backend build" -ForegroundColor Yellow
 } else {
-    Write-Host "`n[2/5] Building backend Spring Boot jar..." -ForegroundColor Yellow
+    Write-Host "`n[2/5] Building backend Spring Boot jar (mvn verify, tests included)..." -ForegroundColor Yellow
+    # 用 verify 而不是 package -DskipTests:
+    #   - 质量门禁(enforcer / 单测 / JaCoCo / ArchUnit / Testcontainers)全部挂在
+    #     verify 阶段,跳过测试等于让这一整套守护在设计上不存在(路线图 P0 task 0.1)。
+    #   - Docker 不可用时 Testcontainers 用例会显式 skip 并打印原因,不是静默放过。
     Set-Location $BackendDir
-    mvn package -DskipTests -q
+    mvn verify -q
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Backend build failed"
+        Write-Error "Backend build failed (quality gate not passed)"
         exit 1
     }
     Write-Host "  Backend build done" -ForegroundColor Green

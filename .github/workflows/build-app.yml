@@ -1,5 +1,20 @@
-# DevNest Desktop App Build Pipeline
-# Push to dev/main or trigger manually to build Windows exe + msi
+# DevNest 流水线:质量门禁 → 打包
+#
+# 为什么拆成两个 job(路线图 P0 task 0.1):
+#   过去只有一个 job,而且打 jar 用的是 `mvn package -DskipTests` —— 测试从未被执行,
+#   "CI 绿"只等价于"能编译",推不出"没坏"。整套架构自检(ArchUnit / 覆盖率 /
+#   Testcontainers / 资源登记)都需要"测试真的跑起来"才有载体(路线图铁律 1)。
+#
+#   现在:
+#     quality-gate(ubuntu)  跑 `mvn verify`:单测 + JaCoCo + enforcer + ArchUnit
+#                           + Testcontainers(真实 MySQL/Redis 容器)+ 增量覆盖率门禁
+#                           + OWASP 漏洞门禁(需 NVD_API_KEY secret,缺失时显式标注"未执行"),并把产物 jar 交出去。
+#     build(windows)        needs: quality-gate,只做 Windows 打包(Tauri/jlink),
+#                           直接下载上面那个 jar,因此全流程不存在 -DskipTests。
+#
+#   顺带解决两件事:
+#     - 测试只在 Linux 跑一次,不再在 Windows 上重复一遍(省 ~10 分钟);
+#     - Testcontainers 需要 Linux Docker,windows-2022 runner 上没有,放 ubuntu 才真跑得起来。
 #
 # Output artifacts:
 #   - DevNest_x.x.x_x64-setup.exe (NSIS installer, includes bundled JRE 21)
@@ -14,6 +29,7 @@ on:
     paths:
       - 'backend/**'
       - 'frontend-ui/**'
+      - 'scripts/**'
       - '.github/workflows/build-app.yml'
   workflow_dispatch:
 
@@ -26,8 +42,165 @@ defaults:
     shell: pwsh
 
 jobs:
+  # ==========================================================================
+  # Job 1 · 质量门禁 —— 唯一的"测试执行者",不产出安装包
+  # ==========================================================================
+  quality-gate:
+    name: Quality Gate (tests + coverage + architecture + vulnerabilities)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ============================================================
+      # 1. Checkout(需要完整历史:增量覆盖率门禁要能解析基线 ref)
+      # ============================================================
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # ============================================================
+      # 2. Setup JDK 21
+      # ============================================================
+      - name: Setup JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      # ============================================================
+      # 3. Install DM JDBC driver (bundled in repo, not in Maven Central)
+      #    这次不再"失败也放过":jar 就在仓库里,装不上说明构建输入坏了,
+      #    让构建红比悄悄降级成"无 DM 支持"更诚实。
+      # ============================================================
+      - name: Install DM JDBC driver
+        working-directory: backend
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $jar = "lib/DmJdbcDriver18-8.1.3.140.jar"
+          if (-not (Test-Path $jar)) {
+            Write-Error "DM JDBC driver jar not found: $jar"
+            exit 1
+          }
+          Write-Host "Installing DM JDBC driver from $jar"
+          mvn install:install-file `
+            "-Dfile=$jar" `
+            '-DgroupId=com.dameng' `
+            '-DartifactId=DmJdbcDriver18' `
+            '-Dversion=8.1.3.140' `
+            '-Dpackaging=jar' `
+            -B -q
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "DM JDBC driver install failed (exit $LASTEXITCODE)"
+            exit 1
+          }
+          Write-Host "DM JDBC driver installed"
+
+      # ============================================================
+      # 4. Maven verify —— 四道门禁一次跑完
+      #    enforcer(dependencyConvergence) / surefire 单测 / jacoco:check /
+      #    ArchUnit 架构守护 / Testcontainers 集成测试 /
+      #    dependency-check 漏洞门禁(CVSS >= ${owasp.fail-cvss} 即失败)
+      #
+      #    -Psecurity-scan:漏洞扫描需要下载 NVD 数据库,不能塞进每个人的本地
+      #    verify;但它必须出现在 CI 里,否则就是"写在文档里的愿望"。
+      #
+      #    前提:NVD_API_KEY。NVD 对无凭据访问返回 403,且插件 9.x 起已无免 Key
+      #    的数据源(见 backend/pom.xml)。所以这里不是无条件带 -Psecurity-scan,
+      #    而是按 secret 是否存在决定 —— 缺 Key 时明确标注"本次未执行"。
+      # ============================================================
+      - name: Cache NVD database
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: ${{ runner.os }}-nvd-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-nvd-
+
+      - name: Maven verify
+        working-directory: backend
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          # 漏洞门禁的运行前提是 NVD_API_KEY:NVD 的 CVE 2.0 接口对无凭据访问
+          # 返回 403,插件 9.x 起也不再有免 Key 的批量数据源(详见 backend/pom.xml
+          # 中 security-scan profile 的注释)。
+          #
+          # key 缺失时不"假装通过",也不直接判红,而是显式标注【本次未执行】并写进
+          # job summary —— 让 GitHub 界面上看得见"这条门禁这次没跑",而不是看不见的
+          # 通过。配好 secret 后无需改任何代码,门禁自动生效并真的会拦人。
+          $mvnArgs = @('-B', 'verify')
+          if ([string]::IsNullOrWhiteSpace($env:NVD_API_KEY)) {
+            Write-Host "::warning title=Vulnerability gate NOT executed::仓库未配置 NVD_API_KEY secret，本次运行未执行 OWASP dependency-check 漏洞门禁。请到 Settings -> Secrets and variables -> Actions 添加 NVD_API_KEY（免费申请：https://nvd.nist.gov/developers/request-an-api-key），门禁将自动生效。"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '### 漏洞门禁未执行 (Vulnerability gate NOT executed)'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '仓库未配置 `NVD_API_KEY` secret，本次运行为“测试 + 覆盖率 + 架构”门禁，**不含** OWASP dependency-check。'
+          } else {
+            $mvnArgs += '-Psecurity-scan'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value '### 漏洞门禁已执行 (CVSS >= 7 即失败)'
+          }
+
+          Write-Host ("Running: mvn " + ($mvnArgs -join ' '))
+          mvn @mvnArgs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Quality gate failed (exit $LASTEXITCODE)"
+            exit 1
+          }
+          Write-Host "All Maven gates passed"
+
+      # ============================================================
+      # 5. 增量行覆盖率门禁
+      #    只卡"本次改动引入的、可执行却没被覆盖"的行。存量覆盖率另由
+      #    jacoco:check 的棘轮地板看住,两者互补(路线图 P0 task 0.2)。
+      # ============================================================
+      - name: Incremental line coverage gate
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          # push 事件给的是上一个提交;workflow_dispatch 没有该字段,
+          # 新建分支时 GitHub 会给全 0 的 sha —— 两种都回退到 HEAD~1。
+          $base = '${{ github.event.before }}'
+          $zeroSha = '0000000000000000000000000000000000000000'
+          if ([string]::IsNullOrWhiteSpace($base) -or $base -eq $zeroSha) {
+            $base = 'HEAD~1'
+            Write-Host "::notice::no usable github.event.before, falling back to HEAD~1"
+          }
+
+          & ./scripts/check-incremental-coverage.ps1 -BaseRef $base -ShowDetail
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # ============================================================
+      # 6. 归档报告(失败也要拿到现场)
+      # ============================================================
+      - name: Upload gate reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-reports
+          path: |
+            backend/**/target/surefire-reports/**
+            backend/**/target/site/jacoco/**
+            backend/**/target/dependency-check-report.*
+          if-no-files-found: ignore
+
+      # ============================================================
+      # 7. 交出后端产物给 Job 2 —— 这是"打包 job 不跑测试"的前提
+      # ============================================================
+      - name: Upload backend jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: devnest-boot-jar
+          path: backend/devnest-boot/target/devnest-boot-1.0.0.jar
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Job 2 · 打包 —— 只做 Windows 原生打包,不再碰 Maven 测试
+  # ==========================================================================
   build:
     name: Build Windows Desktop App
+    needs: quality-gate
     runs-on: windows-2022
     timeout-minutes: 45
 
@@ -39,14 +212,13 @@ jobs:
         uses: actions/checkout@v5
 
       # ============================================================
-      # 2. Setup JDK 21 (Temurin) — used for Maven build AND jlink JRE
+      # 2. Setup JDK 21 (Temurin) — 用于 jlink 生成随包 JRE
       # ============================================================
       - name: Setup JDK 21
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'maven'
 
       # ============================================================
       # 3. Setup Node.js
@@ -78,7 +250,28 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # ============================================================
-      # 5. Create minimal JRE 21 using jlink (bundled in app, no system JDK needed)
+      # 5. 取回 Job 1 已验证过的后端 jar
+      #    jar 是平台无关的 Java 字节码,在 Ubuntu 上构建、在 Windows 上打包完全等价。
+      #    这样既保证"打包的东西一定是过过门禁的那一份",又不重复跑测试。
+      # ============================================================
+      - name: Download backend jar from quality gate
+        uses: actions/download-artifact@v4
+        with:
+          name: devnest-boot-jar
+          path: backend/devnest-boot/target
+
+      - name: Verify jar exists
+        run: |
+          $jar = "backend/devnest-boot/target/devnest-boot-1.0.0.jar"
+          if (-not (Test-Path $jar)) {
+            Write-Error "Backend jar not found: $jar"
+            exit 1
+          }
+          $size = [math]::Round((Get-Item $jar).Length / 1MB, 1)
+          Write-Host "Backend jar: $size MB"
+
+      # ============================================================
+      # 6. Create minimal JRE 21 using jlink (bundled in app, no system JDK needed)
       #    Module list lives in scripts/build-jre.ps1 (single source of truth).
       #    MUST include jdk.unsupported: Spring AOP(CGLIB/Objenesis) 依赖
       #    sun.misc.Unsafe,缺失时 @Transactional 服务启动即抛
@@ -91,59 +284,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # ============================================================
-      # 6. Install DM JDBC driver (bundled in repo, not in Maven Central)
-      # ============================================================
-      - name: Install DM JDBC driver
-        working-directory: backend
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $jar = "lib/DmJdbcDriver18-8.1.3.140.jar"
-          if (Test-Path $jar) {
-            Write-Host "Installing DM JDBC driver from $jar"
-            mvn install:install-file `
-              "-Dfile=$jar" `
-              '-DgroupId=com.dameng' `
-              '-DartifactId=DmJdbcDriver18' `
-              '-Dversion=8.1.3.140' `
-              '-Dpackaging=jar' `
-              -B -q
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "DM JDBC driver installed successfully"
-            } else {
-              Write-Host "::warning::DM JDBC driver install failed (exit $LASTEXITCODE), building without DM support"
-            }
-          } else {
-            Write-Host "::warning::DM JDBC driver jar not found, building without DM support"
-          }
-
-      # ============================================================
-      # 7. Build backend Spring Boot jar
-      # ============================================================
-      - name: Build backend jar
-        working-directory: backend
-        run: |
-          $ErrorActionPreference = 'Continue'
-          Write-Host "Building backend with Maven..."
-          mvn package -DskipTests -B -q
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Backend build failed (exit $LASTEXITCODE)"
-            exit 1
-          }
-          Write-Host "Backend build completed"
-
-      - name: Verify jar exists
-        working-directory: backend
-        run: |
-          $jar = "devnest-boot/target/devnest-boot-1.0.0.jar"
-          if (-not (Test-Path $jar)) {
-            Write-Error "Backend jar not found: $jar"
-            exit 1
-          }
-          $size = [math]::Round((Get-Item $jar).Length / 1MB, 1)
-          Write-Host "Backend jar: $size MB"
-
-      # ============================================================
-      # 8. Copy jar to Tauri resources
+      # 7. Copy jar to Tauri resources
       # ============================================================
       - name: Copy jar to Tauri resources
         run: |
@@ -156,7 +297,7 @@ jobs:
           Write-Host "Jar copied to Tauri resources"
 
       # ============================================================
-      # 9. Smoke test: boot backend with the bundled JRE before packaging.
+      # 8. Smoke test: boot backend with the bundled JRE before packaging.
       #    Guards against future jlink module omissions (e.g. jdk.unsupported
       #    -> NoClassDefFoundError: sun/misc/Unsafe -> "Unexpected AOP exception").
       # ============================================================
@@ -205,14 +346,14 @@ jobs:
           if (-not $p.HasExited) { $p.Kill() }
 
       # ============================================================
-      # 10. Install frontend dependencies
+      # 9. Install frontend dependencies
       # ============================================================
       - name: Install frontend dependencies
         working-directory: frontend-ui
         run: npm ci
 
       # ============================================================
-      # 11. Build Tauri app (frontend + Rust + JRE + jar -> exe/msi)
+      # 10. Build Tauri app (frontend + Rust + JRE + jar -> exe/msi)
       # ============================================================
       - name: Build Tauri app
         working-directory: frontend-ui
@@ -246,7 +387,7 @@ jobs:
           Write-Host "Tauri build completed successfully"
 
       # ============================================================
-      # 12. Upload artifacts
+      # 11. Upload artifacts
       # ============================================================
       - name: Find build outputs
         id: find
@@ -286,7 +427,7 @@ jobs:
           if-no-files-found: warn
 
       # ============================================================
-      # 13. Summary
+      # 12. Summary
       # ============================================================
       - name: Build summary
         if: always()

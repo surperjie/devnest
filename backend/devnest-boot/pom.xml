@@ -80,6 +80,41 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- ============================================================
+             架构守护(P0 task 0.5)
+             为什么放在 boot 的 test 源集:ArchUnit 需要"看见全部模块的类",
+             而 boot 是唯一依赖了所有业务模块的模块,天然具备完整 classpath.
+             无需为此新增一个只为测试存在的模块.
+             ============================================================ -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ============================================================
+             集成测试基座(P0 task 0.6):用真实 MySQL 8 / Redis 容器跑,
+             替代 H2 内存库 —— 消除"测试绿"推不出"生产没问题"的方言分裂.
+             Docker 不可用时由 @EnabledIfDockerAvailable 显式跳过(不是静默降级).
+             ============================================================ -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Redis 没有独立的 testcontainers 模块,用 core 的 GenericContainer -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
